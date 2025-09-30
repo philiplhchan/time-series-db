@@ -8,6 +8,7 @@
 package org.opensearch.tsdb.query.stage;
 
 import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.tsdb.lang.m3.stage.AliasStage;
 import org.opensearch.tsdb.lang.m3.stage.ScaleStage;
 
 import java.io.IOException;
@@ -69,6 +70,7 @@ public class PipelineStageFactory {
             // For now, manually register known stages. In a full implementation,
             // this would use classpath scanning to find all annotated classes.
             registerStage(ScaleStage.class);
+            registerStage(AliasStage.class);
         } catch (Exception e) {
             throw new RuntimeException("Failed to auto-register pipeline stages", e);
         }
@@ -88,6 +90,10 @@ public class PipelineStageFactory {
         try {
             // Register fromArgs method (required)
             Method fromArgsMethod = stageClass.getMethod("fromArgs", Map.class);
+            assert !STAGE_ARGS_CREATORS.containsKey(stageName) : "Stage type '"
+                + stageName
+                + "' is already registered with "
+                + STAGE_ARGS_CREATORS.get(stageName);
             STAGE_ARGS_CREATORS.put(stageName, args -> {
                 try {
                     return (PipelineStage) fromArgsMethod.invoke(null, args);
@@ -98,6 +104,10 @@ public class PipelineStageFactory {
 
             // Register readFrom method (required)
             Method readFromMethod = stageClass.getMethod("readFrom", StreamInput.class);
+            assert !STAGE_READERS.containsKey(stageName) : "Stage type '"
+                + stageName
+                + "' is already registered with "
+                + STAGE_READERS.get(stageName);
             STAGE_READERS.put(stageName, in -> {
                 try {
                     return (PipelineStage) readFromMethod.invoke(null, in);
@@ -105,7 +115,6 @@ public class PipelineStageFactory {
                     throw new RuntimeException("Failed to read stage from stream", e);
                 }
             });
-
         } catch (NoSuchMethodException e) {
             throw new IllegalArgumentException(
                 "Stage class " + stageClass.getName() + " must have static fromArgs(Map<String, Object>) and readFrom(StreamInput) methods",
