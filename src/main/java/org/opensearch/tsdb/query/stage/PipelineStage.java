@@ -53,6 +53,7 @@ public interface PipelineStage extends Writeable {
      */
     List<TimeSeries> process(List<TimeSeries> input);
 
+    // TODO: this should probably just implement ToXContent interface directly instead of inventing our own
     /**
      * Serialize this stage to XContent including all arguments.
      * @param builder The XContentBuilder to write to

@@ -8,6 +8,7 @@
 package org.opensearch.tsdb.query.stage;
 
 import org.opensearch.core.common.io.stream.StreamInput;
+import org.opensearch.tsdb.lang.m3.stage.AliasByTagsStage;
 import org.opensearch.tsdb.lang.m3.stage.AliasStage;
 import org.opensearch.tsdb.lang.m3.stage.AvgStage;
 import org.opensearch.tsdb.lang.m3.stage.MaxStage;
@@ -85,6 +86,7 @@ public class PipelineStageFactory {
             // this would use classpath scanning to find all annotated classes.
             // Registering in alphabetical order for consistency
             registerStage(AliasStage.class);
+            registerStage(AliasByTagsStage.class);
             registerStage(AsPercentStage.class);
             registerStage(AvgStage.class);
             registerStage(MaxStage.class);
