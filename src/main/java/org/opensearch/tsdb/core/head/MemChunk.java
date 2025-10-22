@@ -16,7 +16,7 @@ import org.opensearch.tsdb.core.chunk.Chunk;
  * </p>
  */
 public class MemChunk {
-    private final long minSeqNo; // minimum sequence number corresponding to a sample in this chunk
+    private long minSeqNo; // minimum sequence number corresponding to a sample in this chunk
     private Chunk chunk;
     private long minTimestamp;
     private long maxTimestamp;
@@ -163,6 +163,14 @@ public class MemChunk {
      */
     public void setPrev(MemChunk chunk) {
         this.prev = chunk;
+    }
+
+    /**
+     * Sets  minimum sequence number in the chunk.
+     * @param seqNo minimum sequence number in the chunk.
+     */
+    public void setMinSeqNo(long seqNo) {
+        this.minSeqNo = seqNo;
     }
 
     /**

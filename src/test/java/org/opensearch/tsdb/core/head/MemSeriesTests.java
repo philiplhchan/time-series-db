@@ -90,6 +90,23 @@ public class MemSeriesTests extends OpenSearchTestCase {
         assertFalse("head chunk is not closable", result.closableChunks().contains(series.getHeadChunk()));
     }
 
+    public void testGetClosableChunksHeadWithOutOfOrderSeqNoIngestion() {
+        Labels labels = ByteLabels.fromStrings("k1", "v1", "k2", "v2");
+        MemSeries series = new MemSeries(123L, labels);
+        ChunkOptions options = new ChunkOptions(8000, 8);
+
+        // Ingest samples in decreasing seqNo.
+        for (int i = 12; i > 0; i--) {
+            long timestamp = (12 - i) * 1000L;
+            double value = i * 10.0;
+            series.append(i, timestamp, value, options);
+        }
+
+        var result = series.getClosableChunks(10000L);
+        assertEquals(1, result.closableChunks().size());
+        assertEquals(1, result.minSeqNo());
+    }
+
     public void testDropChunks() {
         MemSeries series = createMemSeries(3); // creates 3 chunks with 8 samples each
 

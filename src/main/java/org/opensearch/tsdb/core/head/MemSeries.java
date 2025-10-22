@@ -95,6 +95,10 @@ public class MemSeries {
         if (seqNo > this.maxSeqNo) {
             this.maxSeqNo = seqNo;
         }
+
+        if (seqNo < headChunk.getMinSeqNo()) {
+            headChunk.setMinSeqNo(seqNo);
+        }
         return created;
     }
 
