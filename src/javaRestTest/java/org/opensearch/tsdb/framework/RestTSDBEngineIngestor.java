@@ -20,6 +20,7 @@ import org.opensearch.tsdb.utils.TSDBTestUtils;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import static org.opensearch.test.rest.OpenSearchRestTestCase.entityAsMap;
@@ -110,17 +111,19 @@ public record RestTSDBEngineIngestor(RestClient restClient) {
         try {
             Response response = restClient.performRequest(request);
             int statusCode = response.getStatusLine().getStatusCode();
+            Map<String, Object> responseMap = entityAsMap(response);
 
             if (statusCode != HTTP_OK) {
-                throw new IOException(String.format("Bulk ingestion failed: status=%d, response=%s", statusCode, entityAsMap(response)));
+                throw new IOException(String.format(Locale.ROOT, "Bulk ingestion failed: status=%d, response=%s", statusCode, responseMap));
             }
 
             // Check for individual item failures in bulk response using utility method
-            validateBulkResponse(entityAsMap(response));
+            validateBulkResponse(responseMap);
 
         } catch (ResponseException e) {
             throw new IOException(
                 String.format(
+                    Locale.ROOT,
                     "Bulk ingestion request failed: status=%d, response=%s",
                     e.getResponse().getStatusLine().getStatusCode(),
                     entityAsMap(e.getResponse())
@@ -163,7 +166,7 @@ public record RestTSDBEngineIngestor(RestClient restClient) {
                     Integer status = (Integer) indexResult.get("status");
                     if (status != null && status >= 400) {
                         Map<String, Object> error = (Map<String, Object>) indexResult.get("error");
-                        errorDetails.append(String.format("[status=%d, error=%s] ", status, error));
+                        errorDetails.append(String.format(Locale.ROOT, "[status=%d, error=%s] ", status, error));
                     }
                 }
             }

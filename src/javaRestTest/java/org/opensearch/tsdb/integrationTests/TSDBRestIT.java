@@ -8,7 +8,6 @@
 package org.opensearch.tsdb.integrationTests;
 
 import org.opensearch.tsdb.framework.RestTimeSeriesTestFramework;
-import org.junit.Test;
 
 /**
  * Example REST integration test for TSDB time series data.
@@ -25,7 +24,7 @@ import org.junit.Test;
  * <p>The test configuration (data, queries, expectations) is defined in the
  * YAML file: test_cases/tsdb_rest_it_example.yaml
  */
-public class TSDBRestITExample extends RestTimeSeriesTestFramework {
+public class TSDBRestIT extends RestTimeSeriesTestFramework {
 
     private static final String TEST_YAML_PATH = "test_cases/tsdb_rest_it_example.yaml";
 
@@ -40,7 +39,6 @@ public class TSDBRestITExample extends RestTimeSeriesTestFramework {
      *
      * @throws Exception If the test fails
      */
-    @Test
     public void testSimpleTSDBQuery() throws Exception {
         initializeTest(TEST_YAML_PATH);
         runBasicTest();

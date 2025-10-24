@@ -20,7 +20,7 @@ test_case:
       min_timestamp: "now-50m"
       max_timestamp: "now-10m"
       step: "10m"
-    metrics:
+    regular_metrics:
       # GET requests with status 200
       - labels: "__name__:http_requests_total,method:GET,status:200"
         values: [100, 120, 110, 95, 105]

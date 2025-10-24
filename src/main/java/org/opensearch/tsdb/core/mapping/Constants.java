@@ -84,28 +84,33 @@ public final class Constants {
 
         /**
          * The default index mappings to be used for TSDB index.
+         * Constructed using the field name constants to maintain consistency.
          */
         public static final String DEFAULT_INDEX_MAPPING = """
             {
               "properties": {
-                "labels": {
+                "{labels}": {
                   "type": "keyword"
                 },
-                "timestamp": {
+                "{timestamp}": {
                   "type": "date",
                   "format": "epoch_millis"
                 },
-                "value": {
+                "{value}": {
                   "type": "double"
                 },
-                "minTimestamp": {
+                "{min_timestamp}": {
                   "type": "long"
                 },
-                "maxTimestamp": {
+                "{max_timestamp}": {
                   "type": "long"
                 }
               }
             }
-            """;
+            """.replace("{labels}", IndexSchema.LABELS)
+            .replace("{timestamp}", SAMPLE_TIMESTAMP)
+            .replace("{value}", SAMPLE_VALUE)
+            .replace("{min_timestamp}", IndexSchema.MIN_TIMESTAMP)
+            .replace("{max_timestamp}", IndexSchema.MAX_TIMESTAMP);
     }
 }

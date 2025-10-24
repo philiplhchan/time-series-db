@@ -124,6 +124,32 @@ afterEvaluate {
     project.validateNebulaPom.enabled = false
 }
 
+// Configure javaRestTest source set
+sourceSets {
+    javaRestTest {
+        java {
+            srcDirs = ['src/javaRestTest/java']
+        }
+        resources {
+            srcDirs = ['src/javaRestTest/resources']
+        }
+        compileClasspath += sourceSets.main.output + sourceSets.test.output
+        runtimeClasspath += sourceSets.main.output + sourceSets.test.output
+    }
+}
+
+configurations {
+    javaRestTestImplementation.extendsFrom testImplementation
+    javaRestTestRuntimeOnly.extendsFrom testRuntimeOnly
+
+    // Resolve dependency conflicts
+    all {
+        resolutionStrategy {
+            force 'org.yaml:snakeyaml:2.3'
+        }
+    }
+}
+
 task integTest(type: RestIntegTestTask) {
     description = "Run tests against a cluster"
     testClassesDirs = sourceSets.test.output.classesDirs
@@ -131,6 +157,21 @@ task integTest(type: RestIntegTestTask) {
 }
 
 integTest {
+    // The --debug-jvm command-line option makes the cluster debuggable; this makes the tests debuggable
+    if (System.getProperty("test.debug") != null) {
+        jvmArgs '-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=*:5005'
+    }
+}
+
+task javaRestTest(type: RestIntegTestTask) {
+    description = "Run REST integration tests"
+    group = JavaBasePlugin.VERIFICATION_GROUP
+    testClassesDirs = sourceSets.javaRestTest.output.classesDirs
+    classpath = sourceSets.javaRestTest.runtimeClasspath
+    mustRunAfter test
+}
+
+javaRestTest {
     // The --debug-jvm command-line option makes the cluster debuggable; this makes the tests debuggable
     if (System.getProperty("test.debug") != null) {
         jvmArgs '-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=*:5005'
@@ -152,6 +193,16 @@ def numNodes = findProperty('numNodes') as Integer ?: 1
 def numZones = findProperty('numZones') as Integer ?: 1
 
 testClusters.integTest {
+    testDistribution = "ARCHIVE"
+
+    if (numZones > 1) numberOfZones = numZones
+    if (numNodes > 1) numberOfNodes = numNodes
+
+    // This installs our plugin into the testClusters
+    plugin(project.tasks.bundlePlugin.archiveFile)
+}
+
+testClusters.javaRestTest {
     testDistribution = "ARCHIVE"
 
     if (numZones > 1) numberOfZones = numZones
@@ -221,6 +272,12 @@ dependencies {
     testImplementation 'com.fasterxml.jackson.core:jackson-annotations:2.18.2'
     testImplementation 'com.fasterxml.jackson.core:jackson-core:2.18.2'
     testImplementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.18.2'
+
+    // javaRestTest dependencies
+    javaRestTestImplementation 'com.fasterxml.jackson.core:jackson-core:2.18.2'
+    javaRestTestImplementation 'com.fasterxml.jackson.core:jackson-databind:2.18.2'
+    javaRestTestImplementation 'com.fasterxml.jackson.core:jackson-annotations:2.18.2'
+    javaRestTestImplementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.18.2'
 }
 
 tasks.register("cleanJavaCCGenerated", Delete) {
@@ -251,6 +308,10 @@ forbiddenApisMain {
 }
 
 forbiddenApisTest {
+    exclude 'org/opensearch/tsdb/lang/m3/m3ql/parser/generated/**'
+}
+
+forbiddenApisJavaRestTest {
     exclude 'org/opensearch/tsdb/lang/m3/m3ql/parser/generated/**'
 }
 

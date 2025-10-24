@@ -149,13 +149,10 @@ public abstract class RestTimeSeriesTestFramework extends OpenSearchRestTestCase
             Settings settings = Settings.builder().loadFromMap(indexSettings).build();
 
             // Use the actual TSDB mapping from Constants
-            ObjectMapper jsonMapper = new ObjectMapper();
-            Map<String, Object> mappingObject = jsonMapper.readValue(Constants.Mapping.DEFAULT_INDEX_MAPPING, Map.class);
-            String mappingJson = jsonMapper.writeValueAsString(mappingObject.get("properties"));
-
+            // The parent createIndex method expects the mapping without outer braces
+            String mappingJson = Constants.Mapping.DEFAULT_INDEX_MAPPING.trim();
+            mappingJson = mappingJson.substring(1, mappingJson.length() - 1).trim();
             createIndex(indexName, settings, mappingJson);
-
-            logger.info("Successfully created index: {}", indexName);
 
         } catch (Exception e) {
             throw new IOException("Failed to create index: " + indexName, e);

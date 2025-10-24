@@ -22,6 +22,7 @@ import org.opensearch.tsdb.query.utils.TimeSeriesOutputMapper.TimeSeriesResult;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.opensearch.rest.RestRequest;
@@ -64,7 +65,7 @@ public class RestQueryExecutor extends BaseQueryExecutor {
      * Execute a query via the REST API.
      *
      * @param queryConfig The query configuration
-     * @param indexName   The index name (unused for REST API)
+     * @param indexName   The index name to query (passed as partitions parameter)
      * @return The Prometheus matrix response
      * @throws Exception If query execution fails
      */
@@ -74,7 +75,7 @@ public class RestQueryExecutor extends BaseQueryExecutor {
             throw new IllegalArgumentException("QueryConfig cannot be null");
         }
 
-        Request request = buildRequest(queryConfig);
+        Request request = buildRequest(queryConfig, indexName);
 
         try {
             Response response = restClient.performRequest(request);
@@ -83,7 +84,12 @@ public class RestQueryExecutor extends BaseQueryExecutor {
         } catch (ResponseException e) {
             String errorBody = extractErrorBody(e);
             throw new IOException(
-                String.format("Query execution failed: status=%d, error=%s", e.getResponse().getStatusLine().getStatusCode(), errorBody),
+                String.format(
+                    Locale.ROOT,
+                    "Query execution failed: status=%d, error=%s",
+                    e.getResponse().getStatusLine().getStatusCode(),
+                    errorBody
+                ),
                 e
             );
         }
@@ -96,13 +102,19 @@ public class RestQueryExecutor extends BaseQueryExecutor {
      * @return The configured REST request
      * @throws IOException If request building fails
      */
-    private Request buildRequest(QueryConfig queryConfig) throws IOException {
+    private Request buildRequest(QueryConfig queryConfig, String indexName) throws IOException {
         long startMillis = queryConfig.config().minTimestamp().toEpochMilli();
         long endMillis = queryConfig.config().maxTimestamp().toEpochMilli();
         long stepMillis = queryConfig.config().step().toMillis();
 
         String endpoint = queryConfig.type().getRestEndpoint();
-        String url = String.format(QUERY_PARAM_FORMAT, endpoint, startMillis, endMillis, stepMillis);
+        String url = String.format(Locale.ROOT, QUERY_PARAM_FORMAT, endpoint, startMillis, endMillis, stepMillis);
+
+        // Add partitions parameter with the index name for better performance and test isolation
+        // Note: This is optional - without it, OpenSearch searches all indices
+        if (indexName != null && !indexName.isEmpty()) {
+            url = url + "&partitions=" + indexName;
+        }
 
         Request request = new Request(RestRequest.Method.POST.name(), url);
 
@@ -136,7 +148,7 @@ public class RestQueryExecutor extends BaseQueryExecutor {
 
         String resultType = (String) data.get(FIELD_RESULT_TYPE);
         if (!RESULT_TYPE_MATRIX.equals(resultType)) {
-            throw new IOException(String.format("Expected matrix result type, got: %s", resultType));
+            throw new IOException(String.format(Locale.ROOT, "Expected matrix result type, got: %s", resultType));
         }
 
         List<Map<String, Object>> resultList = (List<Map<String, Object>>) data.get(FIELD_RESULT);
@@ -150,10 +162,10 @@ public class RestQueryExecutor extends BaseQueryExecutor {
             List<List<Object>> values = (List<List<Object>>) resultItem.get(FIELD_VALUES);
 
             if (metric == null) {
-                throw new IOException(String.format("Result item missing 'metric' field: %s", resultItem));
+                throw new IOException(String.format(Locale.ROOT, "Result item missing 'metric' field: %s", resultItem));
             }
             if (values == null) {
-                throw new IOException(String.format("Result item missing 'values' field for metric: %s", metric));
+                throw new IOException(String.format(Locale.ROOT, "Result item missing 'values' field for metric: %s", metric));
             }
 
             timeSeriesResults.add(new TimeSeriesResult(metric, values));
