@@ -843,21 +843,6 @@ public class TSDBEngine extends Engine {
     }
 
     /**
-     * TODO: parent method in OS-core is package private, we're not able to access it. For now, just copy the code implementation to unblock until we make an upstream change to make it protected.
-     *
-     * @param commitData last user commit data
-     * @return history uuid from commit data
-     */
-    @Override
-    String loadHistoryUUID(Map<String, String> commitData) {
-        final String uuid = commitData.get(HISTORY_UUID_KEY);
-        if (uuid == null) {
-            throw new IllegalStateException("commit doesn't contain history uuid");
-        }
-        return uuid;
-    }
-
-    /**
      * Commits segment information to disk with updated checkpoint data.
      *
      * @param checkpoint the local checkpoint to commit
@@ -919,7 +904,7 @@ public class TSDBEngine extends Engine {
      */
     private void handlePostAppendCallback(Index index, IndexResult indexResult) {
         // Add to translog for all operations that are not from translog itself
-        if (!indexOriginIsFromTranslog(index.origin())) {
+        if (!index.origin().isFromTranslog()) {
             try {
                 final var location = translogManager.add(new Translog.Index(index, indexResult));
                 indexResult.setTranslogLocation(location);
@@ -953,7 +938,7 @@ public class TSDBEngine extends Engine {
      */
     private void rewriteParsedDocumentSource(Index index, long seriesRef, TSDBDocument metricDocument, boolean isNewSeriesCreated)
         throws IOException {
-        if (indexOriginIsFromTranslog(index.origin())) {
+        if (index.origin().isFromTranslog()) {
             // skip rewriting source for translog replays
             return;
         }
@@ -973,19 +958,6 @@ public class TSDBEngine extends Engine {
             builder.endObject();
             index.parsedDoc().setSource(BytesReference.bytes(builder), XContentType.SMILE);
         }
-    }
-
-    /**
-     * TODO: revert to using the "correct" check after `Origin#isFromTranslog` is made public in opensearch core
-     * <pre>
-     *   if (index.origin().isFromTranslog()) {
-     * </pre>
-     *
-     * @param origin Index operation origin
-     * @return whether this index operation originated from translog reply
-     */
-    boolean indexOriginIsFromTranslog(Operation.Origin origin) {
-        return (origin == Operation.Origin.LOCAL_TRANSLOG_RECOVERY || origin == Operation.Origin.LOCAL_RESET);
     }
 
     /**
