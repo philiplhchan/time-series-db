@@ -88,8 +88,10 @@ public class M3PlanNodeFactory {
             case Constants.Functions.ValueFilter.EQUALS:
             case Constants.Functions.ValueFilter.GE:
             case Constants.Functions.ValueFilter.GREATER_EQUAL:
+            case Constants.Functions.ValueFilter.REMOVE_BELOW_VALUE:
             case Constants.Functions.ValueFilter.LE:
             case Constants.Functions.ValueFilter.LESS_EQUAL:
+            case Constants.Functions.ValueFilter.REMOVE_ABOVE_VALUE:
             case Constants.Functions.ValueFilter.NE:
             case Constants.Functions.ValueFilter.NOT_EQUALS:
             case Constants.Functions.ValueFilter.GT:

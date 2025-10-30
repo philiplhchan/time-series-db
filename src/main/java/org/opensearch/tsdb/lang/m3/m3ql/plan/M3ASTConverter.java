@@ -28,7 +28,10 @@ import java.util.Set;
 public class M3ASTConverter {
     private static final Set<String> FUNCTIONS_WITH_PIPELINE_ARG = Set.of(
         Constants.Functions.Binary.AS_PERCENT,
+        Constants.Functions.Binary.RATIO,
         Constants.Functions.Binary.DIFF,
+        Constants.Functions.Binary.SUBTRACT,
+        Constants.Functions.Binary.DIVIDE,
         Constants.Functions.Binary.DIVIDE_SERIES
     );
 
@@ -224,9 +227,9 @@ public class M3ASTConverter {
     // Maps function names to BinaryPlanNode.Type enums
     private BinaryPlanNode.Type getBinaryPipelineType(String functionName) {
         return switch (functionName) {
-            case Constants.Functions.Binary.AS_PERCENT -> BinaryPlanNode.Type.AS_PERCENT;
-            case Constants.Functions.Binary.DIFF -> BinaryPlanNode.Type.DIFF;
-            case Constants.Functions.Binary.DIVIDE_SERIES -> BinaryPlanNode.Type.DIVIDE_SERIES;
+            case Constants.Functions.Binary.AS_PERCENT, Constants.Functions.Binary.RATIO -> BinaryPlanNode.Type.AS_PERCENT;
+            case Constants.Functions.Binary.DIFF, Constants.Functions.Binary.SUBTRACT -> BinaryPlanNode.Type.DIFF;
+            case Constants.Functions.Binary.DIVIDE, Constants.Functions.Binary.DIVIDE_SERIES -> BinaryPlanNode.Type.DIVIDE_SERIES;
             default -> throw new IllegalArgumentException("Binary function " + functionName + " is not supported.");
         };
     }

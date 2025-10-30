@@ -168,6 +168,11 @@ public class Constants {
             public static final String GREATER_EQUAL = ">=";
 
             /**
+             * removeBelowValue function name (alias for ge).
+             */
+            public static final String REMOVE_BELOW_VALUE = "removeBelowValue";
+
+            /**
              * gt function name.
              */
             public static final String GT = "gt";
@@ -186,6 +191,11 @@ public class Constants {
              * less than or equal operator.
              */
             public static final String LESS_EQUAL = "<=";
+
+            /**
+             * removeAboveValue function name (alias for le).
+             */
+            public static final String REMOVE_ABOVE_VALUE = "removeAboveValue";
 
             /**
              * lt function name.
@@ -308,9 +318,24 @@ public class Constants {
             public static final String AS_PERCENT = "asPercent";
 
             /**
+             * ratio function name (alias for asPercent).
+             */
+            public static final String RATIO = "ratio";
+
+            /**
              * diff function name.
              */
             public static final String DIFF = "diff";
+
+            /**
+             * subtract function name (alias for diff).
+             */
+            public static final String SUBTRACT = "subtract";
+
+            /**
+             * divide function name (alias for divideSeries).
+             */
+            public static final String DIVIDE = "divide";
 
             /**
              * divideSeries function name.
