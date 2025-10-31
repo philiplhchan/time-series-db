@@ -102,6 +102,21 @@ public class Constants {
         public static final String MOVING_SUM = "movingSum";
 
         /**
+         * percentileOfSeries function name.
+         */
+        public static final String PERCENTILE_OF_SERIES = "percentileOfSeries";
+
+        /**
+         * median function name (alias for percentileOfSeries with 50th percentile).
+         */
+        public static final String MEDIAN = "median";
+
+        /**
+         * medianOfSeries function name (alias for percentileOfSeries with 50th percentile).
+         */
+        public static final String MEDIAN_OF_SERIES = "medianOfSeries";
+
+        /**
          * perSecond function name.
          */
         public static final String PER_SECOND = "perSecond";

@@ -23,6 +23,7 @@ import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.KeepLastValuePlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.M3PlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.MovingPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.PerSecondPlanNode;
+import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.PercentileOfSeriesPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.RemoveEmptyPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.ScalePlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.ScaleToSecondsPlanNode;
@@ -74,6 +75,10 @@ public class M3PlanNodeFactory {
             case Constants.Functions.MOVING_MIN:
             case Constants.Functions.MOVING_SUM:
                 return MovingPlanNode.of(functionNode);
+            case Constants.Functions.PERCENTILE_OF_SERIES:
+            case Constants.Functions.MEDIAN:
+            case Constants.Functions.MEDIAN_OF_SERIES:
+                return PercentileOfSeriesPlanNode.of(functionNode);
             case Constants.Functions.PER_SECOND:
                 return PerSecondPlanNode.of(functionNode);
             case Constants.Functions.REMOVE_EMPTY:

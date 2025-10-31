@@ -1,0 +1,2 @@
+PERCENTILE_OF_SERIES(percentiles=[50.0], interpolate=false, groupBy=[city])
+  FETCH({name=[a]}, !{})

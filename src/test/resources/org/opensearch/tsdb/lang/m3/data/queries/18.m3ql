@@ -1,0 +1,4 @@
+# test percentileOfSeries
+fetch name:a
+  | percentileOfSeries 0,0.1,30.0001,90.99 true city dc
+

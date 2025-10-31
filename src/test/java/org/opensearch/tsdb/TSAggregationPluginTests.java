@@ -28,6 +28,7 @@ import org.opensearch.tsdb.lang.m3.stage.ScaleStage;
 import org.opensearch.tsdb.lang.m3.stage.SumStage;
 import org.opensearch.tsdb.lang.m3.stage.AsPercentStage;
 import org.opensearch.tsdb.lang.m3.stage.AvgStage;
+import org.opensearch.tsdb.lang.m3.stage.PercentileOfSeriesStage;
 import org.opensearch.tsdb.query.aggregator.InternalTimeSeries;
 import org.opensearch.tsdb.query.aggregator.TimeSeriesUnfoldAggregationBuilder;
 import org.opensearch.tsdb.query.aggregator.TimeSeriesCoordinatorAggregationBuilder;
@@ -1352,6 +1353,153 @@ public class TSAggregationPluginTests extends TimeSeriesAggregatorTestCase {
             "Exception should mention that aggregation does not implement TimeSeriesProvider",
             exception.getMessage().contains("does not implement TimeSeriesProvider") && exception.getMessage().contains("filter_agg")
         );
+    }
+
+    /**
+     * Test PercentileOfSeriesStage calculating multiple percentiles across time series with sparse data.
+     *
+     * Test data setup:
+     * - 5 time series across 3 timestamps (1000, 2000, 3000)
+     * - Some series have missing data points (nulls represented by absence)
+     * - Calculate percentiles: 0th, 30th, 50th, 90th, 95th, 99th, 100th
+     *
+     * Timestamp 1000: [10, 20, 30, 40, 50] (all 5 series present)
+     * Timestamp 2000: [100, 200, 300, 400] (only 4 series - server5 missing)
+     * Timestamp 3000: [15, 25, 35] (only 3 series - server4 and server5 missing)
+     */
+    public void testPercentileOfSeriesStage() throws Exception {
+        TimeSeriesUnfoldAggregationBuilder unfoldAgg = new TimeSeriesUnfoldAggregationBuilder(
+            "unfold_percentile",
+            List.of(new PercentileOfSeriesStage(List.of(0.0f, 30.0f, 50.0f, 90.0f, 95.0f, 99.0f, 100.0f), false)),
+            1000L,
+            3000L,
+            1000L
+        );
+
+        testCaseWithClosedChunkIndex(unfoldAgg, new MatchAllDocsQuery(), index -> {
+            // Server1: present at all timestamps
+            createTimeSeriesDocument(index, "metric", "instance", "server1", 1000L, 10.0, 2000L, 100.0, 3000L, 15.0);
+
+            // Server2: present at all timestamps
+            createTimeSeriesDocument(index, "metric", "instance", "server2", 1000L, 20.0, 2000L, 200.0, 3000L, 25.0);
+
+            // Server3: present at all timestamps
+            createTimeSeriesDocument(index, "metric", "instance", "server3", 1000L, 30.0, 2000L, 300.0, 3000L, 35.0);
+
+            // Server4: missing at timestamp 3000 (sparse data)
+            createTimeSeriesDocument(index, "metric", "instance", "server4", 1000L, 40.0, 2000L, 400.0);
+
+            // Server5: missing at timestamps 2000 and 3000 (very sparse data)
+            createTimeSeriesDocument(index, "metric", "instance", "server5", 1000L, 50.0);
+        }, (InternalTimeSeries result) -> {
+            assertNotNull("Result should not be null", result);
+            List<TimeSeries> timeSeries = result.getTimeSeries();
+
+            // Should have 7 output series (one per percentile: 0, 30, 50, 90, 95, 99, 100)
+            assertEquals("Should have 7 percentile series", 7, timeSeries.size());
+
+            // Find each percentile series by label
+            List<TimeSeries> p0List = findSeriesWithLabels(timeSeries, Map.of("_percentile", "0.0"));
+            assertEquals("Should have exactly 1 series with _percentile=0.0", 1, p0List.size());
+            TimeSeries p0Series = p0List.get(0);
+
+            List<TimeSeries> p30List = findSeriesWithLabels(timeSeries, Map.of("_percentile", "30.0"));
+            assertEquals("Should have exactly 1 series with _percentile=30.0", 1, p30List.size());
+            TimeSeries p30Series = p30List.get(0);
+
+            List<TimeSeries> p50List = findSeriesWithLabels(timeSeries, Map.of("_percentile", "50.0"));
+            assertEquals("Should have exactly 1 series with _percentile=50.0", 1, p50List.size());
+            TimeSeries p50Series = p50List.get(0);
+
+            List<TimeSeries> p90List = findSeriesWithLabels(timeSeries, Map.of("_percentile", "90.0"));
+            assertEquals("Should have exactly 1 series with _percentile=90.0", 1, p90List.size());
+            TimeSeries p90Series = p90List.get(0);
+
+            List<TimeSeries> p95List = findSeriesWithLabels(timeSeries, Map.of("_percentile", "95.0"));
+            assertEquals("Should have exactly 1 series with _percentile=95.0", 1, p95List.size());
+            TimeSeries p95Series = p95List.get(0);
+
+            List<TimeSeries> p99List = findSeriesWithLabels(timeSeries, Map.of("_percentile", "99.0"));
+            assertEquals("Should have exactly 1 series with _percentile=99.0", 1, p99List.size());
+            TimeSeries p99Series = p99List.get(0);
+
+            List<TimeSeries> p100List = findSeriesWithLabels(timeSeries, Map.of("_percentile", "100.0"));
+            assertEquals("Should have exactly 1 series with _percentile=100.0", 1, p100List.size());
+            TimeSeries p100Series = p100List.get(0);
+
+            // Verify 0th percentile (minimum)
+            // t=1000: [10,20,30,40,50] -> fractionalRank=0.0*5=0.0, ceil=0, <=1 -> 10
+            // t=2000: [100,200,300,400] -> fractionalRank=0.0*4=0.0, ceil=0, <=1 -> 100
+            // t=3000: [15,25,35] -> fractionalRank=0.0*3=0.0, ceil=0, <=1 -> 15
+            List<Sample> expectedP0 = List.of(new FloatSample(1000L, 10.0f), new FloatSample(2000L, 100.0f), new FloatSample(3000L, 15.0f));
+            assertSamplesEqual("0th percentile (minimum)", expectedP0, p0Series.getSamples(), SAMPLE_COMPARISON_DELTA);
+
+            // Verify 30th percentile
+            // t=1000: [10,20,30,40,50] -> fractionalRank=0.3*5=1.5, ceil=2, index=1 -> 20
+            // t=2000: [100,200,300,400] -> fractionalRank=0.3*4=1.2, ceil=2, index=1 -> 200
+            // t=3000: [15,25,35] -> fractionalRank=0.3*3=0.9, ceil=1, <=1 -> 15
+            List<Sample> expectedP30 = List.of(
+                new FloatSample(1000L, 20.0f),
+                new FloatSample(2000L, 200.0f),
+                new FloatSample(3000L, 15.0f)
+            );
+            assertSamplesEqual("30th percentile", expectedP30, p30Series.getSamples(), SAMPLE_COMPARISON_DELTA);
+
+            // Verify 50th percentile (median)
+            // t=1000: [10,20,30,40,50] -> fractionalRank=0.5*5=2.5, ceil=3, index=2 -> 30
+            // t=2000: [100,200,300,400] -> fractionalRank=0.5*4=2.0, ceil=2, index=1 -> 200
+            // t=3000: [15,25,35] -> fractionalRank=0.5*3=1.5, ceil=2, index=1 -> 25
+            List<Sample> expectedP50 = List.of(
+                new FloatSample(1000L, 30.0f),
+                new FloatSample(2000L, 200.0f),
+                new FloatSample(3000L, 25.0f)
+            );
+            assertSamplesEqual("50th percentile (median)", expectedP50, p50Series.getSamples(), SAMPLE_COMPARISON_DELTA);
+
+            // Verify 90th percentile
+            // t=1000: [10,20,30,40,50] -> fractionalRank=0.9*5=4.5, ceil=5, index=4 -> 50
+            // t=2000: [100,200,300,400] -> fractionalRank=0.9*4=3.6, ceil=4, index=3 -> 400
+            // t=3000: [15,25,35] -> fractionalRank=0.9*3=2.7, ceil=3, index=2 -> 35
+            List<Sample> expectedP90 = List.of(
+                new FloatSample(1000L, 50.0f),
+                new FloatSample(2000L, 400.0f),
+                new FloatSample(3000L, 35.0f)
+            );
+            assertSamplesEqual("90th percentile", expectedP90, p90Series.getSamples(), SAMPLE_COMPARISON_DELTA);
+
+            // Verify 95th percentile
+            // t=1000: [10,20,30,40,50] -> fractionalRank=0.95*5=4.75, ceil=5, index=4 -> 50
+            // t=2000: [100,200,300,400] -> fractionalRank=0.95*4=3.8, ceil=4, index=3 -> 400
+            // t=3000: [15,25,35] -> fractionalRank=0.95*3=2.85, ceil=3, index=2 -> 35
+            List<Sample> expectedP95 = List.of(
+                new FloatSample(1000L, 50.0f),
+                new FloatSample(2000L, 400.0f),
+                new FloatSample(3000L, 35.0f)
+            );
+            assertSamplesEqual("95th percentile", expectedP95, p95Series.getSamples(), SAMPLE_COMPARISON_DELTA);
+
+            // Verify 99th percentile
+            // t=1000: [10,20,30,40,50] -> fractionalRank=0.99*5=4.95, ceil=5, index=4 -> 50
+            // t=2000: [100,200,300,400] -> fractionalRank=0.99*4=3.96, ceil=4, index=3 -> 400
+            // t=3000: [15,25,35] -> fractionalRank=0.99*3=2.97, ceil=3, index=2 -> 35
+            List<Sample> expectedP99 = List.of(
+                new FloatSample(1000L, 50.0f),
+                new FloatSample(2000L, 400.0f),
+                new FloatSample(3000L, 35.0f)
+            );
+            assertSamplesEqual("99th percentile", expectedP99, p99Series.getSamples(), SAMPLE_COMPARISON_DELTA);
+
+            // Verify 100th percentile (maximum)
+            // t=1000: [10,20,30,40,50] -> fractionalRank=1.0*5=5.0, ceil=5, index=4 -> 50
+            // t=2000: [100,200,300,400] -> fractionalRank=1.0*4=4.0, ceil=4, index=3 -> 400
+            // t=3000: [15,25,35] -> fractionalRank=1.0*3=3.0, ceil=3, index=2 -> 35
+            List<Sample> expectedP100 = List.of(
+                new FloatSample(1000L, 50.0f),
+                new FloatSample(2000L, 400.0f),
+                new FloatSample(3000L, 35.0f)
+            );
+            assertSamplesEqual("100th percentile (maximum)", expectedP100, p100Series.getSamples(), SAMPLE_COMPARISON_DELTA);
+        });
     }
 
 }

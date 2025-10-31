@@ -1,0 +1,3 @@
+# test median
+fetch name:a
+  | median city

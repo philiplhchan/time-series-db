@@ -7,6 +7,7 @@
  */
 package org.opensearch.tsdb;
 
+import org.opensearch.tsdb.core.model.Labels;
 import org.opensearch.tsdb.core.model.Sample;
 import org.opensearch.tsdb.query.aggregator.TimeSeries;
 import org.opensearch.tsdb.query.stage.BinaryPipelineStage;
@@ -18,7 +19,9 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
 import java.util.stream.Stream;
@@ -214,5 +217,42 @@ public class TestUtils {
     ) {
         assertNullLeftInputThrowsException(stage, nonNullInput, expectedStageName);
         assertNullRightInputThrowsException(stage, nonNullInput, expectedStageName);
+    }
+
+    /**
+     * Finds all time series that match all the specified label criteria.
+     *
+     * @param seriesList The list of time series to search
+     * @param labelCriteria Map of label key-value pairs that must all match
+     * @return List of matching time series (may be empty)
+     */
+    public static List<TimeSeries> findSeriesWithLabels(List<TimeSeries> seriesList, Map<String, String> labelCriteria) {
+        List<TimeSeries> matchingSeries = new ArrayList<>();
+
+        for (TimeSeries series : seriesList) {
+            Labels labels = series.getLabels();
+            if (labels == null) {
+                continue;
+            }
+
+            Map<String, String> labelMap = labels.toMapView();
+
+            // Check if all label criteria match
+            boolean allMatch = true;
+            for (Map.Entry<String, String> criterion : labelCriteria.entrySet()) {
+                String expectedValue = criterion.getValue();
+                String actualValue = labelMap.get(criterion.getKey());
+                if (!expectedValue.equals(actualValue)) {
+                    allMatch = false;
+                    break;
+                }
+            }
+
+            if (allMatch) {
+                matchingSeries.add(series);
+            }
+        }
+
+        return matchingSeries;
     }
 }

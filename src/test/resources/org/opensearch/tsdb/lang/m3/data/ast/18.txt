@@ -1,0 +1,13 @@
+ROOT
+  PIPELINE
+    FUNCTION(fetch)
+      TAG_KEY(name)
+        TAG_VALUE(a)
+    FUNCTION(percentileOfSeries)
+      VALUE(0)
+      VALUE(0.1)
+      VALUE(30.0001)
+      VALUE(90.99)
+      VALUE(true)
+      VALUE(city)
+      VALUE(dc)
