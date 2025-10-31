@@ -1,0 +1,132 @@
+# TSDB REST Integration Test - Functional Correctness
+# Tests complex M3QL query pipelines with multiple chained transformations
+
+test_setup:
+  name: "Functional Correctness Tests"
+  description: "Complex query pipeline validation for M3QL transformations with edge cases"
+
+  index_config:
+    name: "functional_correctness_test"
+    shards: 3
+    replicas: 0
+
+test_case:
+  name: "Functional Correctness Test"
+
+  # Input data: HTTP metrics with diverse patterns
+  input_data:
+    input_data_type: FIXED_INTERVAL
+    time_config:
+      min_timestamp: "2025-01-01T01:00:00Z"
+      max_timestamp: "2025-01-01T02:30:00Z"
+      step: "10m"
+    regular_metrics:
+      # Series A: Linear incrementing pattern
+      - labels: "name:http_requests_seriesA,method:GET,status:200"
+        values: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+      # Series B: Values with extensive nulls (sparse data)
+      - labels: "name:http_requests_seriesB,method:GET,status:200"
+        values: [11, 12, 13, 14, 15, null, null, null, null, null]
+
+      # Series C: Negative values pattern
+      - labels: "name:http_requests_seriesC,method:POST,status:200"
+        values: [-1, -2, -3, -4, -5, -6, -7, -8, -9, -10]
+
+      # Series D: Mixed positive/negative with nulls
+      - labels: "name:http_requests_seriesD,method:POST,status:500"
+        values: [26, 28, 31, 16, 12, 6, -2, 12, null, 2]
+  # M3QL queries with expected results
+  queries:
+    - name: "complex pipeline - eq filter with transformNull and sort"
+      type: "m3ql"
+      query: "fetch method:POST | eq 12 | removeEmpty | transformNull 2 | sort max desc"
+      time_config:
+         min_timestamp: "2025-01-01T01:00:00Z"
+         max_timestamp: "2025-01-01T02:30:00Z"
+         step: "10m"
+      expected:
+         status: "success"
+         data:
+         - metric: { name: "http_requests_seriesD", method: "POST", status: "500" }
+           values: [2, 2, 2, 2, 12, 2, 2, 12, 2, 2]
+    - name: "asPercent with nulls in baseline series"
+      type: "m3ql"
+      query: "baseline_ref=fetch name:http_requests_seriesB; fetch name:http_requests_seriesA | asPercent(baseline_ref)"
+      time_config:
+         min_timestamp: "2025-01-01T01:00:00Z"
+         max_timestamp: "2025-01-01T02:30:00Z"
+         step: "10m"
+      expected:
+         status: "success"
+         data:
+           - metric: { name: "http_requests_seriesA", method: "GET", status: "200", type: "ratios" }
+             values: [9.090909090909092, 16.666666666666664, 23.076923076923077, 28.57142857142857, 33.33333333333333]
+    - name: "asPercent with transformNull, timeshift, and sort (multiple series)"
+      type: "m3ql"
+      query: |
+        baseline_ref=fetch name:http_requests_seriesB;
+        fetch name:http_requests_seriesA | transformNull 6 | asPercent(baseline_ref)
+        | (fetch name:http_requests_seriesC | asPercent(baseline_ref))
+        | timeshift 10m | sort avg desc
+      time_config:
+        min_timestamp: "2025-01-01T01:00:00Z"
+        max_timestamp: "2025-01-01T02:30:00Z"
+        step: "10m"
+      expected:
+        status: "success"
+        data:
+        - metric: { name: "http_requests_seriesA", method: "GET", status: "200", type: "ratios" }
+          values: [null, 9.090909090909092, 16.666666666666664, 23.076923076923077, 28.57142857142857, 33.33333333333333, null, null, null, null]
+        - metric: { name: "http_requests_seriesC", method: "POST", status: "200", type: "ratios" }
+          values: [null, -9.090909090909092, -16.666666666666664, -23.076923076923077, -28.57142857142857, -33.33333333333333, null, null, null, null]
+    - name: "multi-aggregation - transformNull sumSeries max scale"
+      type: "m3ql"
+      query: "fetch status:200 | transformNull -20 | sumSeries method | max | scale 10"
+      time_config:
+          min_timestamp: "2025-01-01T01:00:00Z"
+          max_timestamp: "2025-01-01T02:30:00Z"
+          step: "10m"
+      expected:
+          status: "success"
+          data:
+            - metric: {}
+              values: [120, 140, 160, 180, 200, -60, -70, -80, -90, -100]
+    - name: "complex pipeline - transformNull perSecond max timeshift"
+      type: "m3ql"
+      query: "fetch method:GET | transformNull 26.1237 | perSecond | max | timeshift 35m"
+      time_config:
+          min_timestamp: "2025-01-01T01:35:00Z"
+          max_timestamp: "2025-01-01T03:05:00Z"
+          step: "10m"
+      expected:
+          status: "success"
+          data:
+            - metric: {}
+              values: [null, 0.0016666666666666668, 0.0016666666666666668, 0.0016666666666666668, 0.0016666666666666668, 0.0185395, 0.0016666666666666668, 0.0016666666666666668, 0.0016666666666666668, 0.0016666666666666668]
+    - name: "union of multiple series"
+      type: "m3ql"
+      query: "seriesA_ref=fetch name:http_requests_seriesA; fetch name:http_requests_seriesD | seriesA_ref"
+      time_config:
+          min_timestamp: "2025-01-01T01:00:00Z"
+          max_timestamp: "2025-01-01T02:30:00Z"
+          step: "10m"
+      expected:
+          status: "success"
+          data:
+            - metric: { name: "http_requests_seriesA", method: "GET", status: "200" }
+              values: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+            - metric: { name: "http_requests_seriesD", method: "POST", status: "500" }
+              values: [26, 28, 31, 16, 12, 6, -2, 12, null, 2]
+    - name: "nested aggregations - sumSeries avg max scale"
+      type: "m3ql"
+      query: "fetch status:200 | transformNull 0 | sumSeries method status | avg | max | scale 0.25"
+      time_config:
+          min_timestamp: "2025-01-01T01:00:00Z"
+          max_timestamp: "2025-01-01T02:30:00Z"
+          step: "10m"
+      expected:
+          status: "success"
+          data:
+            - metric: {}
+              values: [1.375, 1.5, 1.625, 1.75, 1.875, 0, 0, 0, 0, 0]

@@ -1,0 +1,357 @@
+# TSDB REST Integration Test - E2E M3 Query Execution
+# Comprehensive test suite for M3QL query execution and validation via REST API
+
+test_setup:
+  name: "E2E M3QL Query Execution Tests"
+  description: "Comprehensive M3QL query execution tests covering fetch, aggregation, pipeline operations, and error handling"
+
+  index_config:
+    name: "e2e_query_execution"
+    shards: 3
+    replicas: 0
+
+test_case:
+  name: "E2E M3QL Query Execution Test"
+
+  # Input data: HTTP request metrics with various patterns for testing
+  input_data:
+    input_data_type: FIXED_INTERVAL
+    time_config:
+      min_timestamp: "2025-01-01T02:00:00Z"
+      max_timestamp: "2025-01-01T02:55:00Z"
+      step: "5m"
+    regular_metrics:
+      # Series A: Linear increasing pattern - GET requests
+      - labels: "name:http_requests_total_A,method:GET,status:200"
+        values: [1,2,3,4,5,6,7,8,9,10,11,12]
+
+      # Series B: Wave pattern - GET requests
+      - labels: "name:http_requests_total_B,method:GET,status:200"
+        values: [2,4,6,8,10,8,6,4,2,14,12,10]
+
+      # Series C: Decreasing pattern - POST requests
+      - labels: "name:http_requests_total_C,method:POST,status:200"
+        values: [20,18,17,14,13,12,10.5,9.5,6,5,3,2]
+
+      # Series D: Mixed positive/negative values - POST requests
+      - labels: "name:http_requests_total_D,method:POST,status:200"
+        values: [-2.5,5,12,-6,7.5,4,-3,9.5,12,5,12,2]
+
+      # Series E: Values with nulls - POST requests
+      - labels: "name:http_requests_total_E,method:POST,status:200"
+        values: [-2.5,null,12,null,7.5,4,-3,9.5,null,5,12,2]
+
+  # M3QL queries with expected results
+  queries:
+    - name: "fetch - single series by name"
+      type: "m3ql"
+      query: "fetch name:http_requests_total_A"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "http_requests_total_A", method: "GET", status: "200"}
+            values: [1,2,3,4,5,6,7,8,9,10,11,12]
+    - name: "fetch - single series by reference"
+      type: "m3ql"
+      query: "seriesA_ref = fetch name:http_requests_total_A; seriesA_ref"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+          - metric: { name: "http_requests_total_A", method: "GET", status: "200" }
+            values: [ 1,2,3,4,5,6,7,8,9,10,11,12 ]
+    - name: "fetch - multiple series by method label"
+      type: "m3ql"
+      query: "fetch method:POST"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+          - metric: { name: "http_requests_total_C", method: "POST", status: "200" }
+            values: [20,18,17,14,13,12,10.5,9.5,6,5,3,2]
+          - metric: { name: "http_requests_total_D", method: "POST", status: "200" }
+            values: [-2.5,5,12,-6,7.5,4,-3,9.5,12,5,12,2]
+          - metric: { name: "http_requests_total_E", method: "POST", status: "200" }
+            values: [ -2.5,null,12,null,7.5,4,-3,9.5,null,5,12,2 ]
+    - name: "fetch - series with union"
+      type: "m3ql"
+      query: seriesA_ref = fetch name:http_requests_total_A; fetch name:http_requests_total_B | seriesA_ref
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+           - metric: { name: "http_requests_total_A", method: "GET", status: "200" }
+             values: [ 1,2,3,4,5,6,7,8,9,10,11,12 ]
+           - metric: { name: "http_requests_total_B", method: "GET", status: "200" }
+             values: [2,4,6,8,10,8,6,4,2,14,12,10]
+    - name: "aggregation - min across POST series"
+      type: "m3ql"
+      query: "fetch method:POST | min"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+          - metric: { }
+            values: [-2.5,5,12,-6,7.5,4,-3,9.5,6,5,3,2]
+    - name: "aggregation - sum by method"
+      type: "m3ql"
+      query: "fetch status:200 | sum method"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+          - metric: { method: "GET" }
+            values: [ 3,6,9,12,15,14,13,12,11,24,23,22 ]
+          - metric: { method: "POST" }
+            values: [15,23,41,8,28,20,4.5,28.5,18,15,27,6]
+    - name: "aggregation - avg across POST series"
+      type: "m3ql"
+      query: "fetch method:POST | avg"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+          - metric: { }
+            values: [5.0, 11.5, 13.666666666666666, 4.0, 9.333333333333334, 6.666666666666667, 1.5, 9.5, 9.0, 5.0, 9.0, 2.0]
+    - name: "aggregation -  sum over union"
+      type: "m3ql"
+      query: seriesA_ref = fetch name:http_requests_total_A; fetch name:http_requests_total_B | seriesA_ref | sum
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+          - metric: {}
+            values: [ 3,6,9,12,15,14,13,12,11,24,23,22 ]
+    - name: "pipeline - scale after sum aggregation"
+      type: "m3ql"
+      query: "fetch method:GET | sum method | scale 2"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+          - metric: { method: "GET" }
+            values: [ 6,12,18,24,30,28,26,24,22,48,46,44 ]
+    - name: "pipeline - removeEmpty after aggregation"
+      type: "m3ql"
+      query: "fetch method:POST | min | removeEmpty"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+          - metric: { }
+            values: [ -2.5,5,12,-6,7.5,4,-3,9.5,6,5,3,2 ]
+    - name: "pipeline - sort by max descending"
+      type: "m3ql"
+      query: "fetch method:POST | sort max desc"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+          - metric: { name: "http_requests_total_C", method: "POST", status: "200" }
+            values: [ 20,18,17,14,13,12,10.5,9.5,6,5,3,2 ]
+          - metric: { name: "http_requests_total_D", method: "POST", status: "200" }
+            values: [ -2.5,5,12,-6,7.5,4,-3,9.5,12,5,12,2 ]
+          - metric: { name: "http_requests_total_E", method: "POST", status: "200" }
+            values: [ -2.5,null,12,null,7.5,4,-3,9.5,null,5,12,2 ]
+    - name: "pipeline - timeshift with aggregation"
+      type: "m3ql"
+      query: "fetch method:GET | max | timeshift 10m"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+          - metric: { }
+            values: [ null,null,2,4,6,8,10,8,7,8,9,14 ]
+    - name: "pipeline - sum then perSecond"
+      type: "m3ql"
+      query: "fetch method:POST | sum | perSecond"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+          - metric: { }
+            values: [null, 0.02666666666666667, 0.06, null, 0.06666666666666667, null, null, 0.08, null, null, 0.04, null]
+    - name: "pipeline - transformNull with aggregation"
+      type: "m3ql"
+      query: "fetch method:POST | transformNull 0 | sum method"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+          - metric: { method: "POST" }
+            values: [ 15,23,41,8,28,20,4.5,28.5,18,15,27,6 ]
+    - name: "pipeline - scale with zero"
+      type: "m3ql"
+      query: "fetch name:http_requests_total_A | scale 0"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T03:00:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+          - metric: { name: "http_requests_total_A", method: "GET", status: "200" }
+            values: [ 0,0,0,0,0,0,0,0,0,0,0,0 ]
+    - name: "pipeline - timeshift then perSecond"
+      type: "m3ql"
+      query: "fetch name:http_requests_total_A | timeshift 5m | perSecond"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+          - metric: { name: "http_requests_total_A", method: "GET", status: "200" }
+            values: [null, null, 0.0033333333333333335, 0.0033333333333333335, 0.0033333333333333335, 0.0033333333333333335, 0.0033333333333333335, 0.0033333333333333335, 0.0033333333333333335, 0.0033333333333333335, 0.0033333333333333335, 0.0033333333333333335]
+    - name: "pipeline - timeshift then perSecond 2"
+      type: "m3ql"
+      query: "fetch name:http_requests_total_A | timeshift 13m | perSecond"
+      time_config:
+        min_timestamp: "2025-01-01T02:08:00Z"
+        max_timestamp: "2025-01-01T03:03:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+          - metric: { name: "http_requests_total_A", method: "GET", status: "200" }
+            values: [ null, null, 0.0033333333333333335, 0.0033333333333333335, 0.0033333333333333335, 0.0033333333333333335, 0.0033333333333333335, 0.0033333333333333335, 0.0033333333333333335, 0.0033333333333333335, 0.0033333333333333335, 0.0033333333333333335 ]
+    - name: "error - invalid function"
+      type: "m3ql"
+      query: "fetch name:http_requests_total_A | notAFunction"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "failure"
+        error_message: "Query execution failed: status=400, error={\"error\":\"Unknown function: notAFunction\"}"
+    - name: "error - invalid query syntax"
+      type: "m3ql"
+      query: "fetch name:http_requests_total_A | sort notSortOption desc"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "failure"
+        error_message: "Query execution failed: status=400, error={\"error\":\"Sort function must be one of: avg, current, max, stddev, sum. Got: notSortOption\"}"
+    - name: "error - missing required argument"
+      type: "m3ql"
+      query: "fetch name:http_requests_total_A | timeshift"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "failure"
+        error_message: "Query execution failed: status=400, error={\"error\":\"Timeshift function expects exactly one argument\"}"
+    - name: "error - extra argument"
+      type: "m3ql"
+      query: "fetch name:http_requests_total_A | timeshift 10m 10m"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "failure"
+        error_message: "Query execution failed: status=400, error={\"error\":\"Timeshift function expects exactly one argument\"}"
+    - name: "error - invalid duration format"
+      type: "m3ql"
+      query: "fetch name:http_requests_total_A | timeshift m5"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "failure"
+        error_message: "Query execution failed: status=400, error={\"error\":\"Duration must start with a number: m5\"}"
+    - name: "misc - positive timeshift"
+      type: "m3ql"
+      query: "fetch name:http_requests_total_A | timeshift 5m"
+      time_config:
+        min_timestamp: "2025-01-01T02:05:00Z"
+        max_timestamp: "2025-01-01T03:00:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+          - metric: { name: "http_requests_total_A", method: "GET", status: "200" }
+            values: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    - name: "misc - negative timeshift duration A"
+      type: "m3ql"
+      query: "fetch name:http_requests_total_A | timeshift -5m"
+      time_config:
+        min_timestamp: "2025-01-01T01:55:00Z"
+        max_timestamp: "2025-01-01T03:00:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+          - metric: { name: "http_requests_total_A", method: "GET", status: "200" }
+            values: [null, null, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    - name: "misc - negative timeshift duration B"
+      type: "m3ql"
+      query: "fetch name:http_requests_total_A | timeshift -5m"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T03:00:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data:
+          - metric: { name: "http_requests_total_A", method: "GET", status: "200" }
+            values: [ null, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    - name: "misc -- empty result with sum aggregation"
+      type: "m3ql"
+      query: "fetch name:nonexistent_metric | sum"
+      time_config:
+        min_timestamp: "2025-01-01T02:00:00Z"
+        max_timestamp: "2025-01-01T02:55:00Z"
+        step: "5m"
+      expected:
+        status: "success"
+        data: []

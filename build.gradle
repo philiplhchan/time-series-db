@@ -207,6 +207,9 @@ internalClusterTest {
     }
 }
 
+// Make integTest depend on javaRestTest so REST tests run as part of integration testing
+integTest.dependsOn javaRestTest
+
 String javaccGrammarPath = 'src/main/java/org/opensearch/tsdb/lang/m3/m3ql/parser'
 String javaccOutputPath = 'src/main/java/org/opensearch/tsdb/lang/m3/m3ql/parser/generated'
 
