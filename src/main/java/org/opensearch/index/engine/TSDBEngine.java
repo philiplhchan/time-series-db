@@ -337,20 +337,31 @@ public class TSDBEngine extends Engine {
     }
 
     /**
-     * Indicates whether a periodic flush should be performed.
+     * Indicates whether a periodic flush should be performed based on translog size.
      *
-     * @return false, till implemented
+     * @return true if translog size exceeds the flush threshold
      */
     @Override
     public boolean shouldPeriodicallyFlush() {
-        // TODO: implement this correctly
-        return false;
+        final long localCheckpointOfLastCommit;
+        segmentInfosLock.lock();
+        try {
+            localCheckpointOfLastCommit = Long.parseLong(lastCommittedSegmentInfos.getUserData().get(SequenceNumbers.LOCAL_CHECKPOINT_KEY));
+        } finally {
+            segmentInfosLock.unlock();
+        }
+
+        return translogManager.shouldPeriodicallyFlush(
+            localCheckpointOfLastCommit,
+            engineConfig.getIndexSettings().getFlushThresholdSize().getBytes()
+        );
     }
 
     /**
      * Flushes head chunks by memory-mapping completed time ranges and committing segments.
+     * Only performs flush if forced or if translog size exceeds threshold.
      *
-     * @param force force flush, this param is not used
+     * @param force force flush regardless of translog size
      * @param waitIfOngoing indicates whether to wait if there are ongoing flush operations
      * @throws EngineException if the flush operation fails
      */
@@ -368,6 +379,23 @@ public class TSDBEngine extends Engine {
 
         // closeChunksLock has been acquired
         try {
+            // Check if translog is in recovery mode - block flush during local recovery
+            try {
+                // TODO: add IT to verify flush is blocked during local recovery
+                translogManager.ensureCanFlush();
+            } catch (IllegalStateException e) {
+                logger.debug("Skipping flush - translog in local recovery: {}", e.getMessage());
+                return;
+            }
+
+            // Check if flush is needed based on translog size
+            boolean shouldPeriodicallyFlush = shouldPeriodicallyFlush();
+
+            if (!force && !shouldPeriodicallyFlush) {
+                logger.info("Skipping flush - translog size below threshold (force={}, shouldFlush={})", force, shouldPeriodicallyFlush);
+                return;
+            }
+
             logger.debug("MMAPing head chunks");
             // TODO: Long.MAX_VALUE is returned as checkpoint if there are no chunks? might need fix
             long checkpoint = head.closeHeadChunks();

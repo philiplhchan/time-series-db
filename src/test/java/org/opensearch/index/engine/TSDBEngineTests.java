@@ -234,8 +234,52 @@ public class TSDBEngineTests extends EngineTestCase {
         assertSame(Engine.GetResult.NOT_EXISTS, result);
     }
 
-    public void testShouldPeriodicallyFlushReturnsFalse() {
-        assertFalse(metricsEngine.shouldPeriodicallyFlush());
+    public void testShouldPeriodicallyFlushReturnsFalse() throws IOException {
+        String sample1 = createSampleJson(series1, 1712576200L, 1024.0);
+        String sample2 = createSampleJson(series1, 1712576400L, 1026.0);
+        String sample3 = createSampleJson(series2, 1712576200L, 85.5);
+
+        publishSample(0, sample1);
+        publishSample(1, sample2);
+        publishSample(2, sample3);
+
+        // With default settings, translog should not exceed threshold
+        assertFalse("shouldPeriodicallyFlush should return false with default settings", metricsEngine.shouldPeriodicallyFlush());
+    }
+
+    public void testShouldPeriodicallyFlushReturnsTrue() throws Exception {
+        // Create engine with very small flush threshold (128b)
+        IndexSettings smallThresholdSettings = IndexSettingsModule.newIndexSettings(
+            "index",
+            Settings.builder()
+                .put("index.tsdb_engine.enabled", true)
+                .put("index.queries.cache.enabled", false)
+                .put("index.requests.cache.enable", false)
+                .put("index.translog.flush_threshold_size", "128b")
+                .build()
+        );
+
+        // Close existing engine
+        metricsEngine.close();
+        engineStore.close();
+
+        // Create new store and engine with small threshold
+        // Reset engineConfig so buildTSDBEngine creates a fresh one with new thread pool
+        engineConfig = null;
+        final AtomicLong globalCheckpoint = new AtomicLong(SequenceNumbers.NO_OPS_PERFORMED);
+        engineStore = createStore(smallThresholdSettings, newDirectory());
+        metricsEngine = buildTSDBEngine(globalCheckpoint, engineStore, smallThresholdSettings, clusterApplierService);
+
+        // Index multiple samples to exceed the 128b threshold
+        for (int i = 0; i < 20; i++) {
+            long timestamp = 1712576200L + (i * 100L);
+            double value = 1024.0 + i;
+            String sample = createSampleJson(series1, timestamp, value);
+            publishSample(i, sample);
+        }
+
+        // With tiny threshold, translog should exceed it after indexing many samples
+        assertTrue("shouldPeriodicallyFlush should return true when translog exceeds threshold", metricsEngine.shouldPeriodicallyFlush());
     }
 
     public void testThrottling() {
