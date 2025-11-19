@@ -7,11 +7,11 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "country:us",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "country:us"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -55,11 +55,11 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "state:xyz",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "state:xyz"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -93,11 +93,11 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "city:toronto",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "city:toronto"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -140,11 +140,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "country:us",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "country:us"
+                ],
+                "boost" : 1.0
               }
             },
             {
@@ -205,11 +205,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "state:xyz",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "state:xyz"
+                ],
+                "boost" : 1.0
               }
             },
             {
@@ -254,11 +254,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "city:toronto",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "city:toronto"
+                ],
+                "boost" : 1.0
               }
             },
             {

@@ -7,11 +7,11 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "name:queries",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "name:queries"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -45,11 +45,11 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "name:exceptions",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "name:exceptions"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -92,11 +92,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "name:queries",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "name:queries"
+                ],
+                "boost" : 1.0
               }
             },
             {
@@ -146,11 +146,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "name:exceptions",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "name:exceptions"
+                ],
+                "boost" : 1.0
               }
             },
             {

@@ -7,11 +7,11 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "name:a",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "name:a"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -45,11 +45,11 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "name:b",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "name:b"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -92,11 +92,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "name:a",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "name:a"
+                ],
+                "boost" : 1.0
               }
             },
             {
@@ -146,11 +146,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "name:b",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "name:b"
+                ],
+                "boost" : 1.0
               }
             },
             {

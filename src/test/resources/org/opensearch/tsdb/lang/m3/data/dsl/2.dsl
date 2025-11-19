@@ -7,35 +7,12 @@
           "bool" : {
             "filter" : [
               {
-                "bool" : {
-                  "should" : [
-                    {
-                      "term" : {
-                        "labels" : {
-                          "value" : "uuid:uuid-1",
-                          "boost" : 1.0
-                        }
-                      }
-                    },
-                    {
-                      "term" : {
-                        "labels" : {
-                          "value" : "uuid:uuid-2",
-                          "boost" : 1.0
-                        }
-                      }
-                    },
-                    {
-                      "term" : {
-                        "labels" : {
-                          "value" : "uuid:uuid-3",
-                          "boost" : 1.0
-                        }
-                      }
-                    }
+                "terms" : {
+                  "labels" : [
+                    "uuid:uuid-1",
+                    "uuid:uuid-2",
+                    "uuid:uuid-3"
                   ],
-                  "adjust_pure_negative" : true,
-                  "minimum_should_match" : "1",
                   "boost" : 1.0
                 }
               },
@@ -78,35 +55,12 @@
           "bool" : {
             "filter" : [
               {
-                "bool" : {
-                  "should" : [
-                    {
-                      "term" : {
-                        "labels" : {
-                          "value" : "uuid:uuid-1",
-                          "boost" : 1.0
-                        }
-                      }
-                    },
-                    {
-                      "term" : {
-                        "labels" : {
-                          "value" : "uuid:uuid-2",
-                          "boost" : 1.0
-                        }
-                      }
-                    },
-                    {
-                      "term" : {
-                        "labels" : {
-                          "value" : "uuid:uuid-3",
-                          "boost" : 1.0
-                        }
-                      }
-                    }
+                "terms" : {
+                  "labels" : [
+                    "uuid:uuid-1",
+                    "uuid:uuid-2",
+                    "uuid:uuid-3"
                   ],
-                  "adjust_pure_negative" : true,
-                  "minimum_should_match" : "1",
                   "boost" : 1.0
                 }
               },
@@ -158,35 +112,12 @@
         "bool" : {
           "filter" : [
             {
-              "bool" : {
-                "should" : [
-                  {
-                    "term" : {
-                      "labels" : {
-                        "value" : "uuid:uuid-1",
-                        "boost" : 1.0
-                      }
-                    }
-                  },
-                  {
-                    "term" : {
-                      "labels" : {
-                        "value" : "uuid:uuid-2",
-                        "boost" : 1.0
-                      }
-                    }
-                  },
-                  {
-                    "term" : {
-                      "labels" : {
-                        "value" : "uuid:uuid-3",
-                        "boost" : 1.0
-                      }
-                    }
-                  }
+              "terms" : {
+                "labels" : [
+                  "uuid:uuid-1",
+                  "uuid:uuid-2",
+                  "uuid:uuid-3"
                 ],
-                "adjust_pure_negative" : true,
-                "minimum_should_match" : "1",
                 "boost" : 1.0
               }
             },
@@ -248,35 +179,12 @@
         "bool" : {
           "filter" : [
             {
-              "bool" : {
-                "should" : [
-                  {
-                    "term" : {
-                      "labels" : {
-                        "value" : "uuid:uuid-1",
-                        "boost" : 1.0
-                      }
-                    }
-                  },
-                  {
-                    "term" : {
-                      "labels" : {
-                        "value" : "uuid:uuid-2",
-                        "boost" : 1.0
-                      }
-                    }
-                  },
-                  {
-                    "term" : {
-                      "labels" : {
-                        "value" : "uuid:uuid-3",
-                        "boost" : 1.0
-                      }
-                    }
-                  }
+              "terms" : {
+                "labels" : [
+                  "uuid:uuid-1",
+                  "uuid:uuid-2",
+                  "uuid:uuid-3"
                 ],
-                "adjust_pure_negative" : true,
-                "minimum_should_match" : "1",
                 "boost" : 1.0
               }
             },

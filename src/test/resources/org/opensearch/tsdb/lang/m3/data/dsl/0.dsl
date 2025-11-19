@@ -4,28 +4,28 @@
     "bool" : {
       "filter" : [
         {
-          "term" : {
-            "labels" : {
-              "value" : "name:service.errors",
-              "boost" : 1.0
-            }
+          "terms" : {
+            "labels" : [
+              "name:service.errors"
+            ],
+            "boost" : 1.0
           }
         },
         {
           "bool" : {
             "should" : [
               {
-                "wildcard" : {
-                  "labels" : {
-                    "wildcard" : "region:us-*",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "region:ca"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
-                "term" : {
+                "wildcard" : {
                   "labels" : {
-                    "value" : "region:ca",
+                    "wildcard" : "region:us-*",
                     "boost" : 1.0
                   }
                 }

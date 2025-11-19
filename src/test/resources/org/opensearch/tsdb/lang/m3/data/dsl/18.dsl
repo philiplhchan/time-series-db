@@ -4,11 +4,11 @@
     "bool" : {
       "filter" : [
         {
-          "term" : {
-            "labels" : {
-              "value" : "name:a",
-              "boost" : 1.0
-            }
+          "terms" : {
+            "labels" : [
+              "name:a"
+            ],
+            "boost" : 1.0
           }
         },
         {

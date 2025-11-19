@@ -4,35 +4,19 @@
     "bool" : {
       "filter" : [
         {
-          "term" : {
-            "labels" : {
-              "value" : "city_name:San Francisco",
-              "boost" : 1.0
-            }
+          "terms" : {
+            "labels" : [
+              "city_name:San Francisco"
+            ],
+            "boost" : 1.0
           }
         },
         {
-          "bool" : {
-            "should" : [
-              {
-                "term" : {
-                  "labels" : {
-                    "value" : "host:host1",
-                    "boost" : 1.0
-                  }
-                }
-              },
-              {
-                "term" : {
-                  "labels" : {
-                    "value" : "host:host2",
-                    "boost" : 1.0
-                  }
-                }
-              }
+          "terms" : {
+            "labels" : [
+              "host:host1",
+              "host:host2"
             ],
-            "adjust_pure_negative" : true,
-            "minimum_should_match" : "1",
             "boost" : 1.0
           }
         },

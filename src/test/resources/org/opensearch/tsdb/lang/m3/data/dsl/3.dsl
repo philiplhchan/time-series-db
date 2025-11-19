@@ -7,11 +7,11 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "region:west",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "region:west"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -45,11 +45,11 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "region:west",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "region:west"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -83,11 +83,11 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "region:west",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "region:west"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -121,11 +121,11 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "region:west",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "region:west"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -168,11 +168,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "region:west",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "region:west"
+                ],
+                "boost" : 1.0
               }
             },
             {
@@ -225,11 +225,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "region:west",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "region:west"
+                ],
+                "boost" : 1.0
               }
             },
             {
@@ -282,11 +282,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "region:west",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "region:west"
+                ],
+                "boost" : 1.0
               }
             },
             {
@@ -339,11 +339,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "region:west",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "region:west"
+                ],
+                "boost" : 1.0
               }
             },
             {

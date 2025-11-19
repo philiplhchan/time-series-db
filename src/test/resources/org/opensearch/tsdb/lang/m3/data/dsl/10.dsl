@@ -4,43 +4,27 @@
     "bool" : {
       "filter" : [
         {
-          "term" : {
-            "labels" : {
-              "value" : "service:web-api",
-              "boost" : 1.0
-            }
-          }
-        },
-        {
-          "term" : {
-            "labels" : {
-              "value" : "name:requests_total",
-              "boost" : 1.0
-            }
-          }
-        },
-        {
-          "bool" : {
-            "should" : [
-              {
-                "term" : {
-                  "labels" : {
-                    "value" : "region:us-east",
-                    "boost" : 1.0
-                  }
-                }
-              },
-              {
-                "term" : {
-                  "labels" : {
-                    "value" : "region:us-west",
-                    "boost" : 1.0
-                  }
-                }
-              }
+          "terms" : {
+            "labels" : [
+              "service:web-api"
             ],
-            "adjust_pure_negative" : true,
-            "minimum_should_match" : "1",
+            "boost" : 1.0
+          }
+        },
+        {
+          "terms" : {
+            "labels" : [
+              "name:requests_total"
+            ],
+            "boost" : 1.0
+          }
+        },
+        {
+          "terms" : {
+            "labels" : [
+              "region:us-east",
+              "region:us-west"
+            ],
             "boost" : 1.0
           }
         },

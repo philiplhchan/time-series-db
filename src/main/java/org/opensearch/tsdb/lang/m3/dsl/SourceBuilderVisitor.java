@@ -661,17 +661,41 @@ public class SourceBuilderVisitor extends M3PlanVisitor<SourceBuilderVisitor.Com
             if (containsWildcard(value)) {
                 return QueryBuilders.wildcardQuery(Constants.IndexSchema.LABELS, labelFilterString(field, value));
             } else {
-                return QueryBuilders.termQuery(Constants.IndexSchema.LABELS, labelFilterString(field, value));
+                return QueryBuilders.termsQuery(Constants.IndexSchema.LABELS, labelFilterString(field, value));
             }
         } else {
-            BoolQueryBuilder innerBool = QueryBuilders.boolQuery();
+            // Multiple values: separate wildcard and non-wildcard values
+            List<String> wildcardValues = new ArrayList<>();
+            List<String> exactValues = new ArrayList<>();
+
             for (String value : values) {
                 if (containsWildcard(value)) {
-                    innerBool.should(QueryBuilders.wildcardQuery(Constants.IndexSchema.LABELS, labelFilterString(field, value)));
+                    wildcardValues.add(value);
                 } else {
-                    innerBool.should(QueryBuilders.termQuery(Constants.IndexSchema.LABELS, labelFilterString(field, value)));
+                    exactValues.add(value);
                 }
             }
+
+            // If all values are exact (no wildcards), use single terms query for better performance
+            if (wildcardValues.isEmpty()) {
+                List<String> labelFilters = exactValues.stream().map(v -> labelFilterString(field, v)).collect(Collectors.toList());
+                return QueryBuilders.termsQuery(Constants.IndexSchema.LABELS, labelFilters);
+            }
+
+            // Mixed or all wildcards: build bool should query
+            BoolQueryBuilder innerBool = QueryBuilders.boolQuery();
+
+            // Add single terms query for all exact values (instead of N term queries)
+            if (!exactValues.isEmpty()) {
+                List<String> labelFilters = exactValues.stream().map(v -> labelFilterString(field, v)).collect(Collectors.toList());
+                innerBool.should(QueryBuilders.termsQuery(Constants.IndexSchema.LABELS, labelFilters));
+            }
+
+            // Add wildcard queries
+            for (String value : wildcardValues) {
+                innerBool.should(QueryBuilders.wildcardQuery(Constants.IndexSchema.LABELS, labelFilterString(field, value)));
+            }
+
             innerBool.minimumShouldMatch(1);
             return innerBool;
         }

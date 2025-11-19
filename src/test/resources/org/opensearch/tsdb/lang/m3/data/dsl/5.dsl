@@ -4,19 +4,19 @@
     "bool" : {
       "filter" : [
         {
-          "term" : {
-            "labels" : {
-              "value" : "service:api-server",
-              "boost" : 1.0
-            }
+          "terms" : {
+            "labels" : [
+              "service:api-server"
+            ],
+            "boost" : 1.0
           }
         },
         {
-          "term" : {
-            "labels" : {
-              "value" : "name:total_leaf_node_latency_histogram",
-              "boost" : 1.0
-            }
+          "terms" : {
+            "labels" : [
+              "name:total_leaf_node_latency_histogram"
+            ],
+            "boost" : 1.0
           }
         },
         {

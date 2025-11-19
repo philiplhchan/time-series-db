@@ -5,7 +5,6 @@
  * this file be licensed under the Apache-2.0 license or a
  * compatible open source license.
  */
-
 package org.opensearch.tsdb.benchmark;
 
 import org.openjdk.jmh.annotations.Benchmark;
@@ -177,7 +176,17 @@ public class HeadAppendBenchmark {
             int seriesIndex = random.nextInt(labelsList.size());
             if (usedIndices.add(seriesIndex)) {
                 Labels labels = labelsList.get(seriesIndex);
-                blackhole.consume(appender.preprocess(Engine.Operation.Origin.PRIMARY, seriesIndex, labels.stableHash(), labels, timestamp, value++, () -> {}));
+                blackhole.consume(
+                    appender.preprocess(
+                        Engine.Operation.Origin.PRIMARY,
+                        seriesIndex,
+                        labels.stableHash(),
+                        labels,
+                        timestamp,
+                        value++,
+                        () -> {}
+                    )
+                );
                 blackhole.consume(appender.append(() -> {}, () -> {}));
                 appended++;
             }

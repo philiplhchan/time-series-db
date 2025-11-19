@@ -7,11 +7,11 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "name:metric1",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "name:metric1"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -45,11 +45,11 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "name:metric2",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "name:metric2"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -83,11 +83,11 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "name:metric3",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "name:metric3"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -121,11 +121,11 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "name:metric4",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "name:metric4"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -168,11 +168,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "name:metric1",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "name:metric1"
+                ],
+                "boost" : 1.0
               }
             },
             {
@@ -222,11 +222,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "name:metric2",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "name:metric2"
+                ],
+                "boost" : 1.0
               }
             },
             {
@@ -276,11 +276,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "name:metric3",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "name:metric3"
+                ],
+                "boost" : 1.0
               }
             },
             {
@@ -325,11 +325,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "name:metric4",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "name:metric4"
+                ],
+                "boost" : 1.0
               }
             },
             {

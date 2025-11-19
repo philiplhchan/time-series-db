@@ -4,27 +4,11 @@
     "bool" : {
       "filter" : [
         {
-          "bool" : {
-            "should" : [
-              {
-                "term" : {
-                  "labels" : {
-                    "value" : "name:controller_commit_response_count",
-                    "boost" : 1.0
-                  }
-                }
-              },
-              {
-                "term" : {
-                  "labels" : {
-                    "value" : "name:controller_failed_response_count",
-                    "boost" : 1.0
-                  }
-                }
-              }
+          "terms" : {
+            "labels" : [
+              "name:controller_commit_response_count",
+              "name:controller_failed_response_count"
             ],
-            "adjust_pure_negative" : true,
-            "minimum_should_match" : "1",
             "boost" : 1.0
           }
         },
@@ -53,27 +37,11 @@
       ],
       "must_not" : [
         {
-          "bool" : {
-            "should" : [
-              {
-                "term" : {
-                  "labels" : {
-                    "value" : "region:us",
-                    "boost" : 1.0
-                  }
-                }
-              },
-              {
-                "term" : {
-                  "labels" : {
-                    "value" : "region:eu",
-                    "boost" : 1.0
-                  }
-                }
-              }
+          "terms" : {
+            "labels" : [
+              "region:us",
+              "region:eu"
             ],
-            "adjust_pure_negative" : true,
-            "minimum_should_match" : "1",
             "boost" : 1.0
           }
         }

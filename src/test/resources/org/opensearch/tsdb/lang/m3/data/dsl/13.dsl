@@ -7,65 +7,19 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "service:logger",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "service:logger"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "name:logs",
-                    "boost" : 1.0
-                  }
-                }
-              },
-              {
-                "range" : {
-                  "min_timestamp" : {
-                    "from" : null,
-                    "to" : 1001000000,
-                    "include_lower" : true,
-                    "include_upper" : false,
-                    "boost" : 1.0
-                  }
-                }
-              },
-              {
-                "range" : {
-                  "max_timestamp" : {
-                    "from" : 999700000,
-                    "to" : null,
-                    "include_lower" : true,
-                    "include_upper" : true,
-                    "boost" : 1.0
-                  }
-                }
-              }
-            ],
-            "adjust_pure_negative" : true,
-            "boost" : 1.0
-          }
-        },
-        {
-          "bool" : {
-            "filter" : [
-              {
-                "term" : {
-                  "labels" : {
-                    "value" : "service:logger",
-                    "boost" : 1.0
-                  }
-                }
-              },
-              {
-                "term" : {
-                  "labels" : {
-                    "value" : "name:attempts",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "name:logs"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -99,11 +53,57 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "service:logger",
+                "terms" : {
+                  "labels" : [
+                    "service:logger"
+                  ],
+                  "boost" : 1.0
+                }
+              },
+              {
+                "terms" : {
+                  "labels" : [
+                    "name:attempts"
+                  ],
+                  "boost" : 1.0
+                }
+              },
+              {
+                "range" : {
+                  "min_timestamp" : {
+                    "from" : null,
+                    "to" : 1001000000,
+                    "include_lower" : true,
+                    "include_upper" : false,
                     "boost" : 1.0
                   }
+                }
+              },
+              {
+                "range" : {
+                  "max_timestamp" : {
+                    "from" : 999700000,
+                    "to" : null,
+                    "include_lower" : true,
+                    "include_upper" : true,
+                    "boost" : 1.0
+                  }
+                }
+              }
+            ],
+            "adjust_pure_negative" : true,
+            "boost" : 1.0
+          }
+        },
+        {
+          "bool" : {
+            "filter" : [
+              {
+                "terms" : {
+                  "labels" : [
+                    "service:logger"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -131,11 +131,11 @@
             ],
             "must_not" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "error_type:backoff",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "error_type:backoff"
+                  ],
+                  "boost" : 1.0
                 }
               }
             ],
@@ -147,11 +147,11 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "service:logger",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "service:logger"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -193,19 +193,19 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "service:logger",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "service:logger"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "name:attempts",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "name:attempts"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -248,19 +248,19 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "service:logger",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "service:logger"
+                ],
+                "boost" : 1.0
               }
             },
             {
-              "term" : {
-                "labels" : {
-                  "value" : "name:logs",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "name:logs"
+                ],
+                "boost" : 1.0
               }
             },
             {
@@ -310,19 +310,19 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "service:logger",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "service:logger"
+                ],
+                "boost" : 1.0
               }
             },
             {
-              "term" : {
-                "labels" : {
-                  "value" : "name:attempts",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "name:attempts"
+                ],
+                "boost" : 1.0
               }
             },
             {
@@ -372,11 +372,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "service:logger",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "service:logger"
+                ],
+                "boost" : 1.0
               }
             },
             {
@@ -404,11 +404,11 @@
           ],
           "must_not" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "error_type:backoff",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "error_type:backoff"
+                ],
+                "boost" : 1.0
               }
             }
           ],
@@ -436,11 +436,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "service:logger",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "service:logger"
+                ],
+                "boost" : 1.0
               }
             },
             {
@@ -498,19 +498,19 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "service:logger",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "service:logger"
+                ],
+                "boost" : 1.0
               }
             },
             {
-              "term" : {
-                "labels" : {
-                  "value" : "name:attempts",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "name:attempts"
+                ],
+                "boost" : 1.0
               }
             },
             {

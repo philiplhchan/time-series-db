@@ -7,11 +7,11 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "name:abc",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "name:abc"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -45,11 +45,11 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "name:def",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "name:def"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -83,11 +83,11 @@
           "bool" : {
             "filter" : [
               {
-                "term" : {
-                  "labels" : {
-                    "value" : "name:ghi",
-                    "boost" : 1.0
-                  }
+                "terms" : {
+                  "labels" : [
+                    "name:ghi"
+                  ],
+                  "boost" : 1.0
                 }
               },
               {
@@ -130,11 +130,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "name:abc",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "name:abc"
+                ],
+                "boost" : 1.0
               }
             },
             {
@@ -189,11 +189,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "name:def",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "name:def"
+                ],
+                "boost" : 1.0
               }
             },
             {
@@ -238,11 +238,11 @@
         "bool" : {
           "filter" : [
             {
-              "term" : {
-                "labels" : {
-                  "value" : "name:ghi",
-                  "boost" : 1.0
-                }
+              "terms" : {
+                "labels" : [
+                  "name:ghi"
+                ],
+                "boost" : 1.0
               }
             },
             {
