@@ -41,15 +41,16 @@ public abstract class AbstractGroupingStage implements UnaryPipelineStage {
      * Constructor for aggregation without label grouping.
      */
     protected AbstractGroupingStage() {
-        this.groupByLabels = new ArrayList<>();
+        this.groupByLabels = Collections.emptyList();
     }
 
     /**
      * Constructor for aggregation with label grouping.
      * @param groupByLabels List of label names to group by. TimeSeries with the same values for these labels will be aggregated together.
+     *                      null will be transformed to empty list (no grouping).
      */
     protected AbstractGroupingStage(List<String> groupByLabels) {
-        this.groupByLabels = groupByLabels;
+        this.groupByLabels = groupByLabels != null ? groupByLabels : Collections.emptyList();
     }
 
     /**
@@ -57,7 +58,7 @@ public abstract class AbstractGroupingStage implements UnaryPipelineStage {
      * @param groupByLabel Single label name to group by.
      */
     protected AbstractGroupingStage(String groupByLabel) {
-        this.groupByLabels = groupByLabel != null ? List.of(groupByLabel) : new ArrayList<>();
+        this.groupByLabels = groupByLabel != null ? List.of(groupByLabel) : Collections.emptyList();
     }
 
     @Override

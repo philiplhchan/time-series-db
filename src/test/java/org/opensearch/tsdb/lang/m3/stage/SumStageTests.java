@@ -171,6 +171,14 @@ public class SumStageTests extends AbstractWireSerializingTestCase<SumStage> {
         assertEquals(List.of(new FloatSample(1000L, 4.0), new FloatSample(2000L, 8.0), new FloatSample(3000L, 12.0)), reduced.getSamples());
     }
 
+    public void testConstructorWithNullGroupByLabels() {
+        // Test that null groupByLabels is normalized to empty list
+        SumStage stage = new SumStage((List<String>) null);
+        assertNotNull(stage);
+        assertNotNull(stage.getGroupByLabels());
+        assertTrue(stage.getGroupByLabels().isEmpty());
+    }
+
     public void testFromArgsNoGrouping() {
         SumStage stage = SumStage.fromArgs(Map.of());
         assertNotNull(stage);
