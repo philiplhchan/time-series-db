@@ -22,7 +22,7 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
- * A pipeline stage that removes series with empty samples lists.
+ * A pipeline stage that removes series with empty samples lists or all NaN values.
  * This implements the removeEmpty function from M3QL
  */
 @PipelineStageAnnotation(name = "remove_empty")
@@ -42,7 +42,15 @@ public class RemoveEmptyStage implements UnaryPipelineStage {
         if (input == null) {
             throw new NullPointerException(getName() + " stage received null input");
         }
-        return input.stream().filter(series -> !series.getSamples().isEmpty()).collect(Collectors.toList());
+        return input.stream().filter(series -> {
+            List<org.opensearch.tsdb.core.model.Sample> samples = series.getSamples();
+            // Remove if empty or if all values are NaN
+            if (samples.isEmpty()) {
+                return false;
+            }
+            // Check if all values are NaN
+            return samples.stream().anyMatch(sample -> !Double.isNaN(sample.getValue()));
+        }).collect(Collectors.toList());
     }
 
     @Override

@@ -26,6 +26,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.opensearch.tsdb.TestUtils.assertSamplesEqual;
+
 public class RemoveEmptyStageTests extends AbstractWireSerializingTestCase<RemoveEmptyStage> {
 
     public void testDefaultConstructor() {
@@ -64,6 +66,45 @@ public class RemoveEmptyStageTests extends AbstractWireSerializingTestCase<Remov
         assertEquals(1, timeSeries.getSamples().size());
         assertEquals(2.0, timeSeries.getSamples().get(0).getValue(), 0.0);
 
+    }
+
+    public void testRemoveSeriesWithAllNaNValues() {
+        // Arrange
+        RemoveEmptyStage removeEmptyStage = new RemoveEmptyStage();
+        Labels labels = ByteLabels.fromStrings("service", "api");
+
+        // Series with all NaN values
+        List<Sample> allNaNSamples = Arrays.asList(
+            new FloatSample(1000L, Double.NaN),
+            new FloatSample(2000L, Double.NaN),
+            new FloatSample(3000L, Double.NaN)
+        );
+        TimeSeries allNaNSeries = new TimeSeries(allNaNSamples, labels, 1000L, 3000L, 1000L, "all-nan-series");
+
+        // Series with some valid values
+        List<Sample> validSamples = Arrays.asList(
+            new FloatSample(1000L, 2.0),
+            new FloatSample(2000L, Double.NaN),
+            new FloatSample(3000L, 4.0)
+        );
+        TimeSeries validSeries = new TimeSeries(validSamples, labels, 1000L, 3000L, 1000L, "valid-series");
+
+        // Series with empty samples
+        TimeSeries emptySeries = new TimeSeries(Collections.emptyList(), labels, 1000L, 3000L, 1000L, "empty-series");
+
+        // Act
+        List<TimeSeries> result = removeEmptyStage.process(List.of(allNaNSeries, validSeries, emptySeries));
+
+        // Assert - only the valid series should remain
+        assertEquals(1, result.size());
+        TimeSeries remainingSeries = result.get(0);
+        assertEquals("valid-series", remainingSeries.getAlias());
+        List<Sample> expectedSamples = Arrays.asList(
+            new FloatSample(1000L, 2.0),
+            new FloatSample(2000L, Double.NaN),
+            new FloatSample(3000L, 4.0)
+        );
+        assertSamplesEqual("Remaining series should contain valid samples", expectedSamples, remainingSeries.getSamples(), 0.001);
     }
 
     public void testProcessWithEmptyInput() {
