@@ -70,6 +70,11 @@ public class AsPercentStage extends AbstractBinaryProjectionStage {
     }
 
     @Override
+    protected NormalizationStrategy getNormalizationStrategy() {
+        return NormalizationStrategy.BATCH;
+    }
+
+    @Override
     protected TimeSeries mergeMatchingSeries(List<TimeSeries> rightTimeSeries) {
         // AsPercent expects only one time series for matched group
         if (rightTimeSeries.isEmpty()) {

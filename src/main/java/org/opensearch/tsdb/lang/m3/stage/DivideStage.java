@@ -78,6 +78,11 @@ public class DivideStage extends AbstractBinaryProjectionStage {
     }
 
     @Override
+    protected NormalizationStrategy getNormalizationStrategy() {
+        return NormalizationStrategy.PAIRWISE;
+    }
+
+    @Override
     protected List<String> getLabelKeys() {
         return labelKeys;
     }

@@ -56,7 +56,9 @@ public class DivideStageTests extends AbstractWireSerializingTestCase<DivideStag
 
         assertEquals(1, result.size());
         TimeSeries resultSeries = result.get(0);
-        assertEquals(3, resultSeries.getSamples().size());
+        // After pairwise normalization, NaN values are skipped, so we only get non-NaN buckets
+        // Left series has NaN at 3000L, so that timestamp is skipped after normalization
+        assertEquals(2, resultSeries.getSamples().size());
 
         List<Sample> samples = resultSeries.getSamples();
 
@@ -65,12 +67,9 @@ public class DivideStageTests extends AbstractWireSerializingTestCase<DivideStag
         assertEquals(10.0, samples.get(0).getValue(), 0.001);
 
         // 2000L: 200.0/0.0 = NaN (zero denominator)
+        // Note: divide by zero produces NaN in the operation, not from normalization
         assertEquals(2000L, samples.get(1).getTimestamp());
         assertTrue("Should be NaN when denominator is zero", Double.isNaN(samples.get(1).getValue()));
-
-        // 3000L: NaN/30.0 = NaN (NaN numerator)
-        assertEquals(3000L, samples.get(2).getTimestamp());
-        assertTrue("Should be NaN when numerator is NaN", Double.isNaN(samples.get(2).getValue()));
     }
 
     public void testMultipleRightSeries() {
@@ -105,7 +104,9 @@ public class DivideStageTests extends AbstractWireSerializingTestCase<DivideStag
 
         assertEquals(1, result.size());
         TimeSeries resultSeries = result.get(0);
-        assertEquals(3, resultSeries.getSamples().size());
+        // After pairwise normalization, NaN values are skipped
+        // Left series has NaN at 3000L, so that timestamp is skipped after normalization
+        assertEquals(2, resultSeries.getSamples().size());
 
         // Verify that result has the original labels plus the type:ratios label
         assertEquals("ratios", resultSeries.getLabels().get("type"));
@@ -119,12 +120,9 @@ public class DivideStageTests extends AbstractWireSerializingTestCase<DivideStag
         assertEquals(5.0, samples.get(0).getValue(), 0.001);
 
         // 2000L: 1000.0/0.0 = NaN (zero denominator)
+        // Note: divide by zero produces NaN in the operation, not from normalization
         assertEquals(2000L, samples.get(1).getTimestamp());
         assertTrue("Should be NaN when denominator is zero", Double.isNaN(samples.get(1).getValue()));
-
-        // 3000L: NaN/300.0 = NaN (NaN numerator)
-        assertEquals(3000L, samples.get(2).getTimestamp());
-        assertTrue("Should be NaN when numerator is NaN", Double.isNaN(samples.get(2).getValue()));
     }
 
     public void testSelectiveLabelMatching() {

@@ -61,6 +61,11 @@ public class SubtractStage extends AbstractBinaryProjectionStage {
     }
 
     @Override
+    protected NormalizationStrategy getNormalizationStrategy() {
+        return NormalizationStrategy.NONE;
+    }
+
+    @Override
     protected List<String> getLabelKeys() {
         return labelKeys;
     }

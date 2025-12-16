@@ -9,11 +9,15 @@ package org.opensearch.tsdb.lang.m3.stage;
 
 import org.opensearch.tsdb.core.model.Labels;
 import org.opensearch.tsdb.core.model.Sample;
+import org.opensearch.tsdb.query.aggregator.ConsolidationFunction;
 import org.opensearch.tsdb.query.aggregator.TimeSeries;
+import org.opensearch.tsdb.query.aggregator.TimeSeriesNormalizer;
 import org.opensearch.tsdb.query.stage.BinaryPipelineStage;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Abstract base class for binary pipeline projection stages that provides common functionality
@@ -30,6 +34,22 @@ public abstract class AbstractBinaryProjectionStage implements BinaryPipelineSta
     public static final String LABELS_PARAM_KEY = "labels";
 
     protected abstract boolean hasKeepNansOption();
+
+    /**
+     * Get the normalization strategy to use for this stage.
+     *
+     * @return The normalization strategy (NONE, PAIRWISE, or GLOBAL)
+     */
+    protected abstract NormalizationStrategy getNormalizationStrategy();
+
+    /**
+     * Get the consolidation function to use for normalization.
+     *
+     * @return The consolidation function (defaults to AVG)
+     */
+    protected ConsolidationFunction getConsolidationFunction() {
+        return ConsolidationFunction.getDefault();
+    }
 
     /**
      * Find a time series in the list that matches the target labels for the provided label keys.
@@ -85,14 +105,15 @@ public abstract class AbstractBinaryProjectionStage implements BinaryPipelineSta
 
     /**
      * Align two time series by timestamp and process the samples.
-     * Subclass will decide if they want to include NaN value from left/right series.
      * Both left and right time series are expected to be sorted by timestamp.
+     * This method walks through both series, finds matching timestamps, and processes
+     * samples at those timestamps. Mismatched timestamps are handled based on hasKeepNansOption().
      *
      * @param leftSeries The left time series
      * @param rightSeries The right time series
      * @return A new time series, or null if no matching timestamps are found.
      */
-    protected TimeSeries alignAndProcess(TimeSeries leftSeries, TimeSeries rightSeries) {
+    private TimeSeries alignTimestampsAndProcess(TimeSeries leftSeries, TimeSeries rightSeries) {
         if (leftSeries == null || rightSeries == null) {
             return null;
         }
@@ -178,8 +199,8 @@ public abstract class AbstractBinaryProjectionStage implements BinaryPipelineSta
 
     /**
      * Process two time series inputs and return the resulting time series aligning timestamps and matching labels.
-     * When labelKeys are specified, standard label matching is always used regardless of the number of right series.
-     * When no labelKeys are specified and there's a single right series, all left series are processed against it.
+     * When the right operand has a single series, all left series are processed against it without label matching.
+     * When the right operand has multiple series, label matching is used to pair left and right series.
      *
      * @param left The left operand time series
      * @param right The right operand time series
@@ -197,7 +218,7 @@ public abstract class AbstractBinaryProjectionStage implements BinaryPipelineSta
             return new ArrayList<>();
         }
 
-        // If no label keys are provided and right operand has single series, project all left operand time series onto
+        // If right operand has single series, project all left operand time series onto
         // the right time series without label matching.
         if (right.size() == 1) {
             return processWithoutLabelMatching(left, right.getFirst());
@@ -208,7 +229,9 @@ public abstract class AbstractBinaryProjectionStage implements BinaryPipelineSta
 
     /**
      * Process left time series against a single right time series without label matching.
-     * This method is called when no labelKeys are specified and a single right time series is provided.
+     * This method is called when a single right time series is provided.
+     *
+     * For BATCH normalization, all left series and the right series are normalized together first.
      *
      * @param left The left operand time series list
      * @param rightSeries The single right operand time series
@@ -217,10 +240,51 @@ public abstract class AbstractBinaryProjectionStage implements BinaryPipelineSta
     protected List<TimeSeries> processWithoutLabelMatching(List<TimeSeries> left, TimeSeries rightSeries) {
         List<TimeSeries> result = new ArrayList<>();
 
-        for (TimeSeries leftSeries : left) {
-            TimeSeries processedSeries = alignAndProcess(leftSeries, rightSeries);
-            if (processedSeries != null) {
-                result.add(processedSeries);
+        // For BATCH normalization, normalize all series together first
+        if (getNormalizationStrategy() == NormalizationStrategy.BATCH) {
+            // Combine all left series + right series for normalization
+            List<TimeSeries> allSeries = new ArrayList<>(left.size() + 1);
+            allSeries.addAll(left);
+            allSeries.add(rightSeries);
+
+            // Normalize all together
+            List<TimeSeries> normalized = TimeSeriesNormalizer.normalize(allSeries, getConsolidationFunction());
+
+            // Last normalized series is the right series
+            TimeSeries normalizedRight = normalized.getLast();
+
+            // Process each normalized left series with normalized right
+            for (int i = 0; i < left.size(); i++) {
+                TimeSeries normalizedLeft = normalized.get(i);
+                // Note: Don't call alignAndProcess since BATCH already normalized, just process directly
+                TimeSeries processedSeries = alignTimestampsAndProcess(normalizedLeft, normalizedRight);
+                if (processedSeries != null) {
+                    result.add(processedSeries);
+                }
+            }
+        } else {
+            // For NONE or PAIRWISE, process each pair individually
+            for (TimeSeries leftSeries : left) {
+                if (leftSeries == null) {
+                    continue;
+                }
+
+                TimeSeries processedSeries;
+                // Apply pairwise normalization if configured
+                if (getNormalizationStrategy() == NormalizationStrategy.PAIRWISE) {
+                    List<TimeSeries> normalized = TimeSeriesNormalizer.normalize(
+                        List.of(leftSeries, rightSeries),
+                        getConsolidationFunction()
+                    );
+                    processedSeries = alignTimestampsAndProcess(normalized.get(0), normalized.get(1));
+                } else {
+                    // NONE strategy - process without normalization
+                    processedSeries = alignTimestampsAndProcess(leftSeries, rightSeries);
+                }
+
+                if (processedSeries != null) {
+                    result.add(processedSeries);
+                }
             }
         }
 
@@ -230,26 +294,36 @@ public abstract class AbstractBinaryProjectionStage implements BinaryPipelineSta
     /**
      * Process left time series against multiple right time series.
      * Matches time series by labels using selective matching if labelKeys are provided. Otherwise match entire labels set.
+     * After matching, delegates to processWithoutLabelMatching for the actual processing.
      *
      * @param left The left operand time series list
      * @param right The right operand time series list
      * @return The result time series list
      */
     protected List<TimeSeries> processWithLabelMatching(List<TimeSeries> left, List<TimeSeries> right) {
-        List<TimeSeries> result = new ArrayList<>();
         // TODO we need to check intersect of left and right on common tags and use them when no grouping labels
         List<String> labelKeys = getLabelKeys();
 
+        // Build matched pairs: group left series by their matching right series
+        Map<TimeSeries, List<TimeSeries>> rightToLeftMap = new HashMap<>();
+
         for (TimeSeries leftSeries : left) {
-            // TODO repeated extracting labels from right series, we should fix by grouping first and iterating over group
             List<TimeSeries> matchingRightSeriesList = findMatchingTimeSeries(right, leftSeries.getLabels(), labelKeys);
             TimeSeries matchingRightSeries = mergeMatchingSeries(matchingRightSeriesList);
             if (matchingRightSeries != null) {
-                TimeSeries processedSeries = alignAndProcess(leftSeries, matchingRightSeries);
-                if (processedSeries != null) {
-                    result.add(processedSeries);
-                }
+                rightToLeftMap.computeIfAbsent(matchingRightSeries, k -> new ArrayList<>()).add(leftSeries);
             }
+        }
+
+        // Process each group of left series with their matching right series
+        List<TimeSeries> result = new ArrayList<>();
+        for (Map.Entry<TimeSeries, List<TimeSeries>> entry : rightToLeftMap.entrySet()) {
+            TimeSeries rightSeries = entry.getKey();
+            List<TimeSeries> matchedLeftSeries = entry.getValue();
+
+            // Delegate to processWithoutLabelMatching which handles normalization
+            List<TimeSeries> processed = processWithoutLabelMatching(matchedLeftSeries, rightSeries);
+            result.addAll(processed);
         }
 
         return result;

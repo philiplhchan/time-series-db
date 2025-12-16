@@ -27,6 +27,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.opensearch.tsdb.TestUtils.assertSamplesEqual;
+
 public class AsPercentStageTests extends AbstractWireSerializingTestCase<AsPercentStage> {
 
     public void testSingleRightSeries() {
@@ -85,14 +87,17 @@ public class AsPercentStageTests extends AbstractWireSerializingTestCase<AsPerce
         TimeSeries leftSeries = new TimeSeries(leftSamples, leftLabels, 1000L, 5000L, 1000L, "api-series");
 
         // Right series with matching labels
+        // Start at 500L with step 1000L: timestamps are 500, 1500, 2500, 3500, 4500
+        // After normalization, these will align with left series buckets
         List<Sample> rightSamples = Arrays.asList(
-            new FloatSample(500L, 50.0),   // not in left series
-            new FloatSample(1000L, 100.0), // matching timestamp
-            new FloatSample(2000L, 200.0), // matching timestamp
-            new FloatSample(4000L, 400.0)  // not in left series
+            new FloatSample(500L, 75.0),   // falls into [500, 1500) bucket
+            new FloatSample(1500L, 200.0), // falls into [1500, 2500) bucket
+            new FloatSample(2500L, 250.0), // not matching with left series
+            new FloatSample(3500L, 350.0), // not matching with left series
+            new FloatSample(4500L, 450.0)  // not matching with left series
         );
         ByteLabels rightLabels = ByteLabels.fromMap(Map.of("service", "api", "instance", "server1"));
-        TimeSeries rightSeries = new TimeSeries(rightSamples, rightLabels, 500L, 4000L, 1000L, "total-series");
+        TimeSeries rightSeries = new TimeSeries(rightSamples, rightLabels, 500L, 4500L, 1000L, "total-series");
 
         // Right series with non-matching labels (should be ignored)
         List<Sample> rightSamples2 = Arrays.asList(new FloatSample(1000L, 500.0));
@@ -106,22 +111,80 @@ public class AsPercentStageTests extends AbstractWireSerializingTestCase<AsPerce
         assertEquals(1, result.size());
         TimeSeries resultSeries = result.get(0);
 
-        // Should only include matching timestamps: 1000L, 2000L
-        assertEquals(2, resultSeries.getSamples().size());
-        List<Sample> samples = resultSeries.getSamples();
-
-        // 1000L: 25.0/100.0 * 100 = 25.0%
-        assertEquals(1000L, samples.get(0).getTimestamp());
-        assertEquals(25.0, samples.get(0).getValue(), 0.001);
-
-        // 2000L: 50.0/200.0 * 100 = 25.0%
-        assertEquals(2000L, samples.get(1).getTimestamp());
-        assertEquals(25.0, samples.get(1).getValue(), 0.001);
+        // With BATCH normalization, series are normalized to common grid starting at 500L
+        // Grid buckets: [500, 1500), [1500, 2500), [2500, 3500), [3500, 4500), [4500, 5500)
+        // After normalization and matching, we get samples where both left and right have data
+        // 500L (bucket [500, 1500)): left avg=25.0, right avg=75.0 → 25.0/75.0 * 100 = 33.33%
+        // 1500L (bucket [1500, 2500)): left avg=50.0, right avg=200.0 → 50.0/200.0 * 100 = 25.0%
+        // 2500L (bucket [2500, 3500)): left avg=75.0, right avg=250.0 → 75.0/250.0 * 100 = 30.0%
+        // 4500L (bucket [4500, 5500)): left avg=100.0, right avg=450.0 → 100.0/450.0 * 100 = 22.22%
+        List<Sample> expectedSamples = Arrays.asList(
+            new FloatSample(500L, 33.33),
+            new FloatSample(1500L, 25.0),
+            new FloatSample(2500L, 30.0),
+            new FloatSample(4500L, 22.22)
+        );
+        assertSamplesEqual("Multiple right series with normalization", expectedSamples, resultSeries.getSamples(), 0.01);
 
         // Verify that result has the original labels plus the type:ratios label
         assertEquals("ratios", resultSeries.getLabels().get("type"));
         assertEquals("api", resultSeries.getLabels().get("service"));
         assertEquals("server1", resultSeries.getLabels().get("instance"));
+    }
+
+    public void testMisalignedStepSizesAndStartTimes() {
+        AsPercentStage stage = new AsPercentStage("right_series");
+
+        // Left series with 10s step size starting at 0L
+        List<Sample> leftSamples = Arrays.asList(
+            new FloatSample(0L, 10.0),
+            new FloatSample(10000L, 20.0),
+            new FloatSample(20000L, 30.0),
+            new FloatSample(30000L, 40.0),
+            new FloatSample(40000L, 50.0)
+        );
+        ByteLabels leftLabels = ByteLabels.fromMap(Map.of("service", "api"));
+        TimeSeries leftSeries = new TimeSeries(leftSamples, leftLabels, 0L, 40000L, 10000L, "api-series");
+
+        // Right series with 20s step size starting at 5000L
+        List<Sample> rightSamples = Arrays.asList(
+            new FloatSample(5000L, 100.0),
+            new FloatSample(25000L, 200.0),
+            new FloatSample(45000L, 300.0)
+        );
+        ByteLabels rightLabels = ByteLabels.fromMap(Map.of("service", "total"));
+        TimeSeries rightSeries = new TimeSeries(rightSamples, rightLabels, 5000L, 45000L, 20000L, "total-series");
+
+        List<TimeSeries> left = Arrays.asList(leftSeries);
+        List<TimeSeries> right = Arrays.asList(rightSeries);
+        List<TimeSeries> result = stage.process(left, right);
+
+        assertEquals(1, result.size());
+        TimeSeries resultSeries = result.get(0);
+
+        // With BATCH normalization:
+        // - LCM(10000, 20000) = 20000ms (20 seconds)
+        // - Min start = 0L, Max end = 45000L
+        // - Range = 45000 - 0 = 45000ms
+        // - Adjusted range (divisible by 20000): 40000ms (45000 - 5000 remainder)
+        // - Buckets: [0, 20000), [20000, 40000), [40000, 60000)
+        // - Bucket [0, 20000): left avg(10, 20) = 15.0, right avg(100) = 100.0 → 15.0%
+        // - Bucket [20000, 40000): left avg(30, 40) = 35.0, right avg(200) = 200.0 → 17.5%
+        // - Bucket [40000, 60000): left avg(50) = 50.0, right avg(300) = 300.0 → 16.67%
+
+        List<Sample> expectedSamples = Arrays.asList(
+            new FloatSample(0L, 15.0f),
+            new FloatSample(20000L, 17.5f),
+            new FloatSample(40000L, 16.67f)
+        );
+        assertSamplesEqual("Misaligned step sizes and start times", expectedSamples, resultSeries.getSamples(), 0.01);
+
+        // Verify the normalized step size is LCM(10000, 20000) = 20000
+        assertEquals(20000L, resultSeries.getStep());
+
+        // Verify labels
+        assertEquals("ratios", resultSeries.getLabels().get("type"));
+        assertEquals("api", resultSeries.getLabels().get("service"));
     }
 
     public void testNoMatchingLabels() {
