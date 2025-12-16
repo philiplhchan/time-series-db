@@ -18,6 +18,8 @@ import org.opensearch.common.lucene.index.OpenSearchDirectoryReader;
 import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.tsdb.core.mapping.LabelStorageType;
 import org.opensearch.tsdb.core.index.ReaderManagerWithMetadata;
+import org.opensearch.tsdb.core.chunk.MMappedChunksManager;
+import org.opensearch.tsdb.core.head.MemChunk;
 import org.opensearch.tsdb.core.index.closed.ClosedChunkIndexManager;
 import org.opensearch.tsdb.core.index.live.MemChunkReader;
 
@@ -25,8 +27,11 @@ import org.opensearch.tsdb.metrics.TSDBMetrics;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.function.LongSupplier;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Reference manager for TSDBDirectoryReader that handles initiation and refreshing of TSDBDirectoryReader instances.
@@ -44,6 +49,8 @@ public class TSDBDirectoryReaderReferenceManager extends ReferenceManager<OpenSe
     private final MemChunkReader memChunkReader;
     private final LabelStorageType labelStorageType;
     private final ShardId shardId;
+    private final MMappedChunksManager mMappedChunksManager;
+    private Map<Long, Set<MemChunk>> mMappedChunks = new HashMap<>();
 
     private volatile List<ReaderManagerWithMetadata> closedChunkIndexReaderManagers;
 
@@ -65,6 +72,7 @@ public class TSDBDirectoryReaderReferenceManager extends ReferenceManager<OpenSe
         ClosedChunkIndexManager closedChunkIndexManager,
         MemChunkReader memChunkReader,
         LabelStorageType labelStorageType,
+        MMappedChunksManager mMappedChunksManager,
         ShardId shardId
     ) throws IOException {
 
@@ -74,15 +82,20 @@ public class TSDBDirectoryReaderReferenceManager extends ReferenceManager<OpenSe
         this.closedChunkIndexReaderManagers = closedChunkIndexManager.getReaderManagersWithMetadata();
         this.memChunkReader = memChunkReader;
         this.labelStorageType = labelStorageType;
+        this.mMappedChunksManager = mMappedChunksManager;
         this.shardId = shardId;
 
         // initiate the MDR here
+        Map<Long, Set<MemChunk>> initialMmappedChunks = mMappedChunksManager.getAllMMappedChunks();
+        this.mMappedChunks = initialMmappedChunks;
         this.current = OpenSearchDirectoryReader.wrap(
             creatNewTSDBDirectoryReader(
                 liveSeriesIndexReaderManager,
                 minLiveTimestampSupplier,
                 closedChunkIndexManager,
                 memChunkReader,
+                initialMmappedChunks,
+                mMappedChunksManager,
                 labelStorageType,
                 0L
             ),
@@ -95,6 +108,8 @@ public class TSDBDirectoryReaderReferenceManager extends ReferenceManager<OpenSe
         LongSupplier minLiveTimestampSupplier,
         ClosedChunkIndexManager closedChunkIndexManager,
         MemChunkReader memchunkReader,
+        Map<Long, Set<MemChunk>> mMappedChunks,
+        MMappedChunksManager mMappedChunksManager,
         LabelStorageType labelStorageType,
         long currentVersion
     ) throws IOException {
@@ -128,6 +143,8 @@ public class TSDBDirectoryReaderReferenceManager extends ReferenceManager<OpenSe
                 minLiveTimestampSupplier,
                 closedReaders,
                 memchunkReader,
+                mMappedChunks,
+                mMappedChunksManager,
                 labelStorageType,
                 currentVersion + 1
             );
@@ -166,7 +183,9 @@ public class TSDBDirectoryReaderReferenceManager extends ReferenceManager<OpenSe
     protected OpenSearchDirectoryReader refreshIfNeeded(OpenSearchDirectoryReader referenceToRefresh) throws IOException {
         List<ReaderManagerWithMetadata> currentReaderManagers = closedChunkIndexManager.getReaderManagersWithMetadata();
 
-        if (!this.closedChunkIndexReaderManagers.equals(currentReaderManagers)) {
+        Map<Long, Set<MemChunk>> currentMmappedChunks = mMappedChunksManager.getAllMMappedChunks();
+        log.info("new mMappedChunks size: {}, existing mMappedChunks size: {}", currentMmappedChunks.size(), this.mMappedChunks.size());
+        if (!currentMmappedChunks.equals(this.mMappedChunks) || !this.closedChunkIndexReaderManagers.equals(currentReaderManagers)) {
             // Structural change detected - indexes were added or removed
             final OpenSearchDirectoryReader reader = OpenSearchDirectoryReader.wrap(
                 creatNewTSDBDirectoryReader(
@@ -174,11 +193,20 @@ public class TSDBDirectoryReaderReferenceManager extends ReferenceManager<OpenSe
                     minLiveTimestampSupplier,
                     closedChunkIndexManager,
                     memChunkReader,
+
+                    currentMmappedChunks,
+                    mMappedChunksManager,
                     labelStorageType,
                     this.current.getVersion()
                 ),
                 shardId
             );
+
+            if (!currentMmappedChunks.equals(this.mMappedChunks)) {
+                // Update the MMappedChunksManager with the new reader version
+                mMappedChunksManager.addReaderVersionToChunks(reader.getVersion(), currentMmappedChunks);
+                this.mMappedChunks = currentMmappedChunks;
+            }
 
             // Update snapshot to prevent redundant structural refreshes
             this.closedChunkIndexReaderManagers = currentReaderManagers;

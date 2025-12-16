@@ -24,7 +24,6 @@ import org.opensearch.search.aggregations.AggregationBuilder;
 import org.opensearch.search.aggregations.AggregatorTestCase;
 import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.test.IndexSettingsModule;
-import org.opensearch.tsdb.core.chunk.ChunkIterator;
 import org.opensearch.tsdb.core.chunk.Encoding;
 import org.opensearch.tsdb.core.index.closed.ClosedChunkIndex;
 import org.opensearch.tsdb.core.index.closed.ClosedChunkIndexLeafReader;
@@ -38,6 +37,7 @@ import org.opensearch.tsdb.core.model.FloatSample;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
@@ -352,17 +352,17 @@ public abstract class TimeSeriesAggregatorTestCase extends AggregatorTestCase {
         }
 
         @Override
-        public List<ChunkIterator> getChunkIterators(long reference) {
+        public List<MemChunk> getChunks(long reference) {
             MemChunk headChunk = seriesChunks.get(reference);
             if (headChunk == null) {
                 return List.of();
             }
 
             // Walk the linked list of chunks (newest to oldest)
-            List<ChunkIterator> chunks = new java.util.ArrayList<>();
+            List<MemChunk> chunks = new java.util.ArrayList<>();
             MemChunk current = headChunk;
             while (current != null) {
-                chunks.addAll(current.getCompoundChunk().getChunkIterators());
+                chunks.add(current);
                 current = current.getPrev();
             }
             return chunks;
@@ -379,7 +379,7 @@ public abstract class TimeSeriesAggregatorTestCase extends AggregatorTestCase {
             super(in, new SubReaderWrapper() {
                 @Override
                 public LeafReader wrap(LeafReader reader) {
-                    return new LiveSeriesIndexLeafReader(reader, memChunkReader, LabelStorageType.BINARY);
+                    return new LiveSeriesIndexLeafReader(reader, memChunkReader, Collections.emptyMap(), LabelStorageType.BINARY);
                 }
             });
             this.memChunkReader = memChunkReader;

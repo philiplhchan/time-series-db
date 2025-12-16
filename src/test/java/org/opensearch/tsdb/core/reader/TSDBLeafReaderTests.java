@@ -19,10 +19,8 @@ import org.apache.lucene.store.ByteBuffersDirectory;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.util.BytesRef;
 import org.opensearch.test.OpenSearchTestCase;
-import org.opensearch.tsdb.core.chunk.ChunkAppender;
 import org.opensearch.tsdb.core.chunk.ChunkIterator;
 import org.opensearch.tsdb.core.chunk.Encoding;
-import org.opensearch.tsdb.core.chunk.XORChunk;
 import org.opensearch.tsdb.core.head.MemChunk;
 import org.opensearch.tsdb.core.index.closed.ClosedChunkIndexTSDBDocValues;
 import org.opensearch.tsdb.core.index.live.LiveSeriesIndexLeafReader;
@@ -51,7 +49,8 @@ public class TSDBLeafReaderTests extends OpenSearchTestCase {
     private Directory directory;
     private IndexWriter indexWriter;
     private MemChunkReader memChunkReader;
-    private Map<Long, List<ChunkIterator>> referenceToChunkMap;
+    private Map<Long, List<MemChunk>> referenceToChunkMap;
+    private Map<Long, java.util.Set<MemChunk>> mmappedChunks;
 
     @Override
     public void setUp() throws Exception {
@@ -66,6 +65,9 @@ public class TSDBLeafReaderTests extends OpenSearchTestCase {
 
         // Create a MemChunkReader that looks up chunks from the map
         memChunkReader = (reference) -> { return referenceToChunkMap.getOrDefault(reference, List.of()); };
+
+        // Setup empty mmapped chunks for testing
+        mmappedChunks = new HashMap<>();
     }
 
     @Override
@@ -87,20 +89,18 @@ public class TSDBLeafReaderTests extends OpenSearchTestCase {
      */
     private void setupReferenceToChunkMapping() {
         // Reference 100L: cpu_usage{host="server1", region="us-west"}
-        XORChunk cpuChunk = new XORChunk();
-        ChunkAppender cpuAppender = cpuChunk.appender();
-        cpuAppender.append(1000L, 75.5);
-        cpuAppender.append(2000L, 80.2);
-        cpuAppender.append(3000L, 85.1);
-        referenceToChunkMap.put(100L, List.of(cpuChunk.iterator()));
+        MemChunk cpuMemChunk = new MemChunk(1L, 1000L, 4000L, null, Encoding.XOR);
+        cpuMemChunk.append(1000L, 75.5, 1L);
+        cpuMemChunk.append(2000L, 80.2, 2L);
+        cpuMemChunk.append(3000L, 85.1, 3L);
+        referenceToChunkMap.put(100L, List.of(cpuMemChunk));
 
         // Reference 200L: memory_usage{host="server2", region="us-east"}
-        XORChunk memoryChunk = new XORChunk();
-        ChunkAppender memoryAppender = memoryChunk.appender();
-        memoryAppender.append(1000L, 2048.0);
-        memoryAppender.append(2000L, 2560.0);
-        memoryAppender.append(3000L, 3072.0);
-        referenceToChunkMap.put(200L, List.of(memoryChunk.iterator()));
+        MemChunk memoryMemChunk = new MemChunk(4L, 1000L, 4000L, null, Encoding.XOR);
+        memoryMemChunk.append(1000L, 2048.0, 4L);
+        memoryMemChunk.append(2000L, 2560.0, 5L);
+        memoryMemChunk.append(3000L, 3072.0, 6L);
+        referenceToChunkMap.put(200L, List.of(memoryMemChunk));
     }
 
     /**
@@ -159,7 +159,12 @@ public class TSDBLeafReaderTests extends OpenSearchTestCase {
             LeafReader leafReader = context.reader();
 
             // Create LiveSeriesIndexLeafReader
-            LiveSeriesIndexLeafReader metricsReader = new LiveSeriesIndexLeafReader(leafReader, memChunkReader, LabelStorageType.BINARY);
+            LiveSeriesIndexLeafReader metricsReader = new LiveSeriesIndexLeafReader(
+                leafReader,
+                memChunkReader,
+                mmappedChunks,
+                LabelStorageType.BINARY
+            );
 
             // Test getTSDBDocValues()
             TSDBDocValues tsdbDocValues = metricsReader.getTSDBDocValues();

@@ -22,11 +22,10 @@ import org.apache.lucene.store.ByteBuffersDirectory;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.util.BytesRef;
 import org.opensearch.test.OpenSearchTestCase;
-import org.opensearch.tsdb.core.chunk.ChunkAppender;
 import org.opensearch.tsdb.core.chunk.ChunkIterator;
-import org.opensearch.tsdb.core.chunk.XORChunk;
 import org.opensearch.tsdb.core.mapping.LabelStorageType;
 import org.opensearch.tsdb.core.model.ByteLabels;
+import org.opensearch.tsdb.core.head.MemChunk;
 import org.opensearch.tsdb.core.model.Labels;
 import org.opensearch.tsdb.core.reader.TSDBDocValues;
 
@@ -44,7 +43,8 @@ public class LiveSeriesIndexLeafReaderTests extends OpenSearchTestCase {
     private Directory directory;
     private IndexWriter indexWriter;
     private MemChunkReader memChunkReader;
-    private Map<Long, List<ChunkIterator>> referenceToChunkMap;
+    private Map<Long, List<MemChunk>> referenceToChunkMap;
+    private Map<Long, java.util.Set<MemChunk>> mMappedChunks;
 
     @Override
     public void setUp() throws Exception {
@@ -57,6 +57,9 @@ public class LiveSeriesIndexLeafReaderTests extends OpenSearchTestCase {
         referenceToChunkMap = new HashMap<>();
         setupTestChunks();
         memChunkReader = reference -> referenceToChunkMap.getOrDefault(reference, List.of());
+
+        // Setup empty mMapped chunks for testing
+        mMappedChunks = new HashMap<>();
     }
 
     @Override
@@ -72,19 +75,17 @@ public class LiveSeriesIndexLeafReaderTests extends OpenSearchTestCase {
 
     private void setupTestChunks() {
         // Reference 100L: cpu_usage{host="server1", region="us-west"}
-        XORChunk cpuChunk = new XORChunk();
-        ChunkAppender cpuAppender = cpuChunk.appender();
-        cpuAppender.append(1000L, 75.5);
-        cpuAppender.append(2000L, 80.2);
-        cpuAppender.append(3000L, 85.1);
-        referenceToChunkMap.put(100L, List.of(cpuChunk.iterator()));
+        MemChunk cpuMemChunk = new MemChunk(1L, 1000L, 4000L, null, org.opensearch.tsdb.core.chunk.Encoding.XOR);
+        cpuMemChunk.append(1000L, 75.5, 1L);
+        cpuMemChunk.append(2000L, 80.2, 2L);
+        cpuMemChunk.append(3000L, 85.1, 3L);
+        referenceToChunkMap.put(100L, List.of(cpuMemChunk));
 
         // Reference 200L: memory_usage{host="server2", region="us-east"}
-        XORChunk memoryChunk = new XORChunk();
-        ChunkAppender memoryAppender = memoryChunk.appender();
-        memoryAppender.append(1000L, 2048.0);
-        memoryAppender.append(2000L, 2560.0);
-        referenceToChunkMap.put(200L, List.of(memoryChunk.iterator()));
+        MemChunk memoryMemChunk = new MemChunk(4L, 1000L, 4000L, null, org.opensearch.tsdb.core.chunk.Encoding.XOR);
+        memoryMemChunk.append(1000L, 2048.0, 4L);
+        memoryMemChunk.append(2000L, 2560.0, 5L);
+        referenceToChunkMap.put(200L, List.of(memoryMemChunk));
 
         // Reference 300L: Empty chunks list
         referenceToChunkMap.put(300L, List.of());
@@ -95,10 +96,15 @@ public class LiveSeriesIndexLeafReaderTests extends OpenSearchTestCase {
         indexWriter.commit();
 
         try (DirectoryReader reader = DirectoryReader.open(directory)) {
-            LeafReaderContext context = reader.leaves().get(0);
+            LeafReaderContext context = reader.leaves().getFirst();
             LeafReader innerReader = context.reader();
 
-            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(innerReader, memChunkReader, LabelStorageType.BINARY);
+            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(
+                innerReader,
+                memChunkReader,
+                mMappedChunks,
+                LabelStorageType.BINARY
+            );
 
             assertNotNull("Reader should not be null", leafReader);
             assertEquals("numDocs should match", innerReader.numDocs(), leafReader.numDocs());
@@ -113,10 +119,15 @@ public class LiveSeriesIndexLeafReaderTests extends OpenSearchTestCase {
         indexWriter.commit();
 
         try (DirectoryReader reader = DirectoryReader.open(directory)) {
-            LeafReaderContext context = reader.leaves().get(0);
+            LeafReaderContext context = reader.leaves().getFirst();
             LeafReader innerReader = context.reader();
 
-            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(innerReader, memChunkReader, LabelStorageType.BINARY);
+            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(
+                innerReader,
+                memChunkReader,
+                mMappedChunks,
+                LabelStorageType.BINARY
+            );
             TSDBDocValues tsdbDocValues = leafReader.getTSDBDocValues();
 
             assertNotNull("TSDBDocValues should not be null", tsdbDocValues);
@@ -137,10 +148,15 @@ public class LiveSeriesIndexLeafReaderTests extends OpenSearchTestCase {
         indexWriter.commit();
 
         try (DirectoryReader reader = DirectoryReader.open(directory)) {
-            LeafReaderContext context = reader.leaves().get(0);
+            LeafReaderContext context = reader.leaves().getFirst();
             LeafReader innerReader = context.reader();
 
-            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(innerReader, memChunkReader, LabelStorageType.BINARY);
+            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(
+                innerReader,
+                memChunkReader,
+                mMappedChunks,
+                LabelStorageType.BINARY
+            );
             TSDBDocValues tsdbDocValues = leafReader.getTSDBDocValues();
 
             List<ChunkIterator> chunks = leafReader.chunksForDoc(0, tsdbDocValues);
@@ -148,7 +164,7 @@ public class LiveSeriesIndexLeafReaderTests extends OpenSearchTestCase {
             assertNotNull("Chunks should not be null", chunks);
             assertEquals("Should have one chunk for reference 100L", 1, chunks.size());
 
-            ChunkIterator chunkIterator = chunks.get(0);
+            ChunkIterator chunkIterator = chunks.getFirst();
             assertNotNull("ChunkIterator should not be null", chunkIterator);
 
             // Verify chunk contains expected data
@@ -164,10 +180,15 @@ public class LiveSeriesIndexLeafReaderTests extends OpenSearchTestCase {
         indexWriter.commit();
 
         try (DirectoryReader reader = DirectoryReader.open(directory)) {
-            LeafReaderContext context = reader.leaves().get(0);
+            LeafReaderContext context = reader.leaves().getFirst();
             LeafReader innerReader = context.reader();
 
-            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(innerReader, memChunkReader, LabelStorageType.BINARY);
+            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(
+                innerReader,
+                memChunkReader,
+                mMappedChunks,
+                LabelStorageType.BINARY
+            );
             TSDBDocValues tsdbDocValues = leafReader.getTSDBDocValues();
 
             List<ChunkIterator> chunks = leafReader.chunksForDoc(0, tsdbDocValues);
@@ -182,10 +203,15 @@ public class LiveSeriesIndexLeafReaderTests extends OpenSearchTestCase {
         indexWriter.commit();
 
         try (DirectoryReader reader = DirectoryReader.open(directory)) {
-            LeafReaderContext context = reader.leaves().get(0);
+            LeafReaderContext context = reader.leaves().getFirst();
             LeafReader innerReader = context.reader();
 
-            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(innerReader, memChunkReader, LabelStorageType.BINARY);
+            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(
+                innerReader,
+                memChunkReader,
+                mMappedChunks,
+                LabelStorageType.BINARY
+            );
             TSDBDocValues tsdbDocValues = leafReader.getTSDBDocValues();
 
             Labels labels = leafReader.labelsForDoc(0, tsdbDocValues);
@@ -207,10 +233,15 @@ public class LiveSeriesIndexLeafReaderTests extends OpenSearchTestCase {
         indexWriter.commit();
 
         try (DirectoryReader reader = DirectoryReader.open(directory)) {
-            LeafReaderContext context = reader.leaves().get(0);
+            LeafReaderContext context = reader.leaves().getFirst();
             LeafReader innerReader = context.reader();
 
-            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(innerReader, memChunkReader, LabelStorageType.BINARY);
+            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(
+                innerReader,
+                memChunkReader,
+                mMappedChunks,
+                LabelStorageType.BINARY
+            );
 
             IOException exception = expectThrows(IOException.class, leafReader::getTSDBDocValues);
             assertTrue("Should mention chunk ref field missing", exception.getMessage().contains("Chunk ref field '" + REFERENCE + "'"));
@@ -225,10 +256,15 @@ public class LiveSeriesIndexLeafReaderTests extends OpenSearchTestCase {
         indexWriter.commit();
 
         try (DirectoryReader reader = DirectoryReader.open(directory)) {
-            LeafReaderContext context = reader.leaves().get(0);
+            LeafReaderContext context = reader.leaves().getFirst();
             LeafReader innerReader = context.reader();
 
-            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(innerReader, memChunkReader, LabelStorageType.BINARY);
+            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(
+                innerReader,
+                memChunkReader,
+                mMappedChunks,
+                LabelStorageType.BINARY
+            );
 
             IOException exception = expectThrows(IOException.class, leafReader::getTSDBDocValues);
             assertTrue("Should mention labels field missing", exception.getMessage().contains("Labels field"));
@@ -240,10 +276,15 @@ public class LiveSeriesIndexLeafReaderTests extends OpenSearchTestCase {
         indexWriter.commit();
 
         try (DirectoryReader reader = DirectoryReader.open(directory)) {
-            LeafReaderContext context = reader.leaves().get(0);
+            LeafReaderContext context = reader.leaves().getFirst();
             LeafReader innerReader = context.reader();
 
-            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(innerReader, memChunkReader, LabelStorageType.BINARY);
+            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(
+                innerReader,
+                memChunkReader,
+                mMappedChunks,
+                LabelStorageType.BINARY
+            );
 
             // Test core delegated methods
             assertSame("getCoreCacheHelper should delegate", innerReader.getCoreCacheHelper(), leafReader.getCoreCacheHelper());
@@ -397,10 +438,15 @@ public class LiveSeriesIndexLeafReaderTests extends OpenSearchTestCase {
         indexWriter.commit();
 
         try (DirectoryReader reader = DirectoryReader.open(directory)) {
-            LeafReaderContext context = reader.leaves().get(0);
+            LeafReaderContext context = reader.leaves().getFirst();
             LeafReader innerReader = context.reader();
 
-            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(innerReader, memChunkReader, LabelStorageType.BINARY);
+            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(
+                innerReader,
+                memChunkReader,
+                mMappedChunks,
+                LabelStorageType.BINARY
+            );
 
             // Test vector operations (should delegate without throwing)
             assertNull("getFloatVectorValues should delegate", leafReader.getFloatVectorValues("non_existent_field"));
@@ -427,10 +473,15 @@ public class LiveSeriesIndexLeafReaderTests extends OpenSearchTestCase {
         indexWriter.commit();
 
         try (DirectoryReader reader = DirectoryReader.open(directory)) {
-            LeafReaderContext context = reader.leaves().get(0);
+            LeafReaderContext context = reader.leaves().getFirst();
             LeafReader innerReader = context.reader();
 
-            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(innerReader, memChunkReader, LabelStorageType.BINARY);
+            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(
+                innerReader,
+                memChunkReader,
+                mMappedChunks,
+                LabelStorageType.BINARY
+            );
             TSDBDocValues tsdbDocValues = leafReader.getTSDBDocValues();
 
             // Test first document
@@ -446,6 +497,128 @@ public class LiveSeriesIndexLeafReaderTests extends OpenSearchTestCase {
 
             Labels labels2 = leafReader.labelsForDoc(1, tsdbDocValues);
             assertEquals("Should have correct metric name for doc 1", "memory_usage", labels2.get("__name__"));
+        }
+    }
+
+    public void testMMappedChunksFiltering() throws IOException {
+        // Setup chunks where some are mmapped
+        MemChunk chunk1 = new MemChunk(1L, 1000L, 2000L, null, org.opensearch.tsdb.core.chunk.Encoding.XOR);
+        chunk1.append(1000L, 100.0, 1L);
+
+        MemChunk chunk2 = new MemChunk(2L, 2000L, 3000L, null, org.opensearch.tsdb.core.chunk.Encoding.XOR);
+        chunk2.append(2000L, 200.0, 2L);
+
+        MemChunk chunk3 = new MemChunk(3L, 3000L, 4000L, null, org.opensearch.tsdb.core.chunk.Encoding.XOR);
+        chunk3.append(3000L, 300.0, 3L);
+
+        // Reference 400L has 3 chunks, with chunk1 and chunk3 being mmapped
+        referenceToChunkMap.put(400L, List.of(chunk1, chunk2, chunk3));
+        mMappedChunks.put(400L, java.util.Set.of(chunk1, chunk3)); // chunk1 and chunk3 are mmapped
+
+        createTestDocument(400L, "test_metric", "server", "region");
+        indexWriter.commit();
+
+        try (DirectoryReader reader = DirectoryReader.open(directory)) {
+            LeafReaderContext context = reader.leaves().getFirst();
+            LeafReader innerReader = context.reader();
+
+            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(
+                innerReader,
+                memChunkReader,
+                mMappedChunks,
+                LabelStorageType.BINARY
+            );
+            TSDBDocValues tsdbDocValues = leafReader.getTSDBDocValues();
+
+            List<ChunkIterator> chunks = leafReader.chunksForDoc(0, tsdbDocValues);
+
+            // Should only return chunk2 (the non-mmapped chunk)
+            assertEquals("Should only return non-mmapped chunks", 1, chunks.size());
+
+            ChunkIterator chunkIterator = chunks.getFirst();
+            assertEquals("Should have chunk2 data", ChunkIterator.ValueType.FLOAT, chunkIterator.next());
+            ChunkIterator.TimestampValue value = chunkIterator.at();
+            assertEquals("Should have chunk2 timestamp", 2000L, value.timestamp());
+            assertEquals("Should have chunk2 value", 200.0, value.value(), 0.001);
+        }
+    }
+
+    public void testAllChunksMMapped() throws IOException {
+        // Setup where all chunks are mmapped
+        MemChunk chunk1 = new MemChunk(1L, 1000L, 2000L, null, org.opensearch.tsdb.core.chunk.Encoding.XOR);
+        chunk1.append(1000L, 100.0, 1L);
+
+        MemChunk chunk2 = new MemChunk(2L, 2000L, 3000L, null, org.opensearch.tsdb.core.chunk.Encoding.XOR);
+        chunk2.append(2000L, 200.0, 2L);
+
+        referenceToChunkMap.put(500L, List.of(chunk1, chunk2));
+        mMappedChunks.put(500L, java.util.Set.of(chunk1, chunk2)); // all chunks are mmapped
+
+        createTestDocument(500L, "all_MMapped_metric", "server", "region");
+        indexWriter.commit();
+
+        try (DirectoryReader reader = DirectoryReader.open(directory)) {
+            LeafReaderContext context = reader.leaves().getFirst();
+            LeafReader innerReader = context.reader();
+
+            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(
+                innerReader,
+                memChunkReader,
+                mMappedChunks,
+                LabelStorageType.BINARY
+            );
+            TSDBDocValues tsdbDocValues = leafReader.getTSDBDocValues();
+
+            List<ChunkIterator> chunks = leafReader.chunksForDoc(0, tsdbDocValues);
+
+            // Should return empty list as all chunks are mmapped
+            assertEquals("Should return empty list when all chunks are mmapped", 0, chunks.size());
+        }
+    }
+
+    public void testMMappedChunksFilteringEdgeCases() throws IOException {
+        // Test multiple scenarios: empty set, order independence
+        MemChunk chunk1 = new MemChunk(1L, 1000L, 2000L, null, org.opensearch.tsdb.core.chunk.Encoding.XOR);
+        chunk1.append(1000L, 100.0, 1L);
+
+        MemChunk chunk2 = new MemChunk(2L, 2000L, 3000L, null, org.opensearch.tsdb.core.chunk.Encoding.XOR);
+        chunk2.append(2000L, 200.0, 2L);
+
+        MemChunk chunk3 = new MemChunk(3L, 3000L, 4000L, null, org.opensearch.tsdb.core.chunk.Encoding.XOR);
+        chunk3.append(3000L, 300.0, 3L);
+
+        // Series 600L: empty mmapped set (should return all chunks)
+        referenceToChunkMap.put(600L, List.of(chunk1));
+        mMappedChunks.put(600L, new java.util.HashSet<>());
+
+        // Series 700L: filter middle chunk (order independence test)
+        referenceToChunkMap.put(700L, List.of(chunk1, chunk2, chunk3));
+        mMappedChunks.put(700L, java.util.Set.of(chunk2));
+
+        createTestDocument(600L, "empty_set_metric", "server1", "region1");
+        createTestDocument(700L, "order_test_metric", "server2", "region2");
+        indexWriter.commit();
+
+        try (DirectoryReader reader = DirectoryReader.open(directory)) {
+            LeafReaderContext context = reader.leaves().getFirst();
+            LeafReader innerReader = context.reader();
+
+            LiveSeriesIndexLeafReader leafReader = new LiveSeriesIndexLeafReader(
+                innerReader,
+                memChunkReader,
+                mMappedChunks,
+                LabelStorageType.BINARY
+            );
+            TSDBDocValues tsdbDocValues = leafReader.getTSDBDocValues();
+
+            // Test empty set - should return all chunks
+            List<ChunkIterator> chunks1 = leafReader.chunksForDoc(0, tsdbDocValues);
+            assertEquals("Empty mmapped set should return all chunks", 1, chunks1.size());
+
+            // Test order independence - should return chunk1 and chunk3
+            List<ChunkIterator> chunks2 = leafReader.chunksForDoc(1, tsdbDocValues);
+            assertEquals("Should filter middle chunk correctly", 2, chunks2.size());
+
         }
     }
 

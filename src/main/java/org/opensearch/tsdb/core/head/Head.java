@@ -18,7 +18,6 @@ import org.opensearch.index.engine.TSDBEmptyLabelException;
 import org.opensearch.index.engine.TSDBOutOfOrderException;
 import org.opensearch.index.engine.TSDBTragicException;
 import org.opensearch.tsdb.TSDBPlugin;
-import org.opensearch.tsdb.core.chunk.ChunkIterator;
 import org.opensearch.tsdb.core.index.closed.ClosedChunkIndexManager;
 import org.opensearch.tsdb.core.index.live.LiveSeriesIndex;
 import org.opensearch.tsdb.core.index.live.MemChunkReader;
@@ -325,7 +324,7 @@ public class Head implements Closeable {
      * @param allowDropEmptySeries whether to allow dropping empty series after closing chunks
      * @return the minimum sequence number of all in-memory samples after closing chunks, or Long.MAX_VALUE if all in-memory chunks are closed
      */
-    public long closeHeadChunks(boolean allowDropEmptySeries) {
+    public IndexChunksResult closeHeadChunks(boolean allowDropEmptySeries) {
         List<MemSeries> allSeries = getSeriesMap().getSeriesMap();
         IndexChunksResult indexChunksResult = indexCloseableChunks(allSeries, allowDropEmptySeries);
 
@@ -339,24 +338,18 @@ public class Head implements Closeable {
             }
         }
 
-        // translog replays starts from LOCAL_CHECKPOINT_KEY + 1, since it expects the local checkpoint to be the last processed seq no
-        // the minSeqNo computed here is the minimum sequence number of all in-memory samples, therefore we must replay it (subtract one).
-        // If the minSeqNo is Long.MAX_VALUE indicating all chunks are closed, return Long.MAX_VALUE.
-        long minSeqNoToKeep = indexChunksResult.minSeqNo() == Long.MAX_VALUE ? Long.MAX_VALUE : indexChunksResult.minSeqNo() - 1;
-
         closedChunkIndexManager.commitChangedIndexes(allSeries);
-        dropClosedChunks(indexChunksResult.seriesToClosedChunks());
+
         try {
             liveSeriesIndex.commitWithMetadata(allSeries);
         } catch (Exception e) {
             throw ExceptionsHelper.convertToRuntime(e);
         }
 
-        // TODO: delegate removal to ReferenceManager
         // If minSeqNoToKeep is Long.MAX_VALUE indicating either no series or all chunks are closed, skip dropping empty series.
         // They will be dropped in the next cycle if still empty.
         int closedSeries = 0;
-        if (allowDropEmptySeries && minSeqNoToKeep != Long.MAX_VALUE) {
+        if (allowDropEmptySeries && indexChunksResult.minSeqNo() != Long.MAX_VALUE) {
             // drop all series with sequence number smaller than the minimum sequence number retained in memory
             closedSeries = dropEmptySeries(indexChunksResult.minSeqNo());
         }
@@ -368,7 +361,7 @@ public class Head implements Closeable {
         }
 
         // TODO consider returning in an incremental fashion, to avoid no-op reprocessing if the server crashes between CCI commits
-        return minSeqNoToKeep;
+        return indexChunksResult;
     }
 
     /**
@@ -381,9 +374,8 @@ public class Head implements Closeable {
     private IndexChunksResult indexCloseableChunks(List<MemSeries> seriesList, boolean allowDropStubSeries) {
         long minSeqNo = Long.MAX_VALUE;
         long minTimestamp = Long.MAX_VALUE;
-        Map<MemSeries, Set<MemChunk>> seriesToClosedChunks = new HashMap<>();
+        Map<Long, Set<MemChunk>> seriesRefToClosedChunks = new HashMap<>();
         int totalClosedChunks = 0;
-
         long cutoffTimestamp = maxTime - oooCutoffWindow;
         log.info("Closing head chunks before timestamp: {}", cutoffTimestamp);
 
@@ -406,6 +398,7 @@ public class Head implements Closeable {
                 continue;
             }
 
+            long seriesRef = series.getReference();
             MemSeries.ClosableChunkResult closeableChunkResult = series.getClosableChunks(cutoffTimestamp);
 
             var addedChunks = 0;
@@ -417,7 +410,9 @@ public class Head implements Closeable {
                         // does not consider open indexes.
                         break;
                     }
-                    seriesToClosedChunks.computeIfAbsent(series, k -> new HashSet<>()).add(memChunk);
+                    // Mark the chunk as closed after successfully adding to the index manager
+                    memChunk.setClosed(true);
+                    seriesRefToClosedChunks.computeIfAbsent(seriesRef, k -> new HashSet<>()).add(memChunk);
                     addedChunks++;
                 } catch (IOException e) {
                     throw new RuntimeException(e);
@@ -443,33 +438,25 @@ public class Head implements Closeable {
                 }
             }
             totalClosedChunks += addedChunks;
+
         }
-        return new IndexChunksResult(seriesToClosedChunks, minSeqNo, totalClosedChunks, minTimestamp);
+        return new IndexChunksResult(seriesRefToClosedChunks, minSeqNo, totalClosedChunks, minTimestamp);
     }
 
     /**
      * Result of indexing closeable chunks operation.
      *
-     * @param seriesToClosedChunks map of MemSeries to the set of MemChunks that were successfully indexed and should be dropped from memory
+     * @param seriesRefToClosedChunks map of MemSeries references to the set of MemChunks that were successfully indexed and should be dropped from memory
      * @param minSeqNo             minimum sequence number among all remaining in-memory (non-closed) samples, or Long.MAX_VALUE if all chunks were closed
      * @param numClosedChunks      total count of MemChunks that were closed and indexed
      * @param minTimestamp         minimum timestamp among all remaining in-memory (non-closed) samples, or Long.MAX_VALUE if all chunks were closed
      */
-    private record IndexChunksResult(Map<MemSeries, Set<MemChunk>> seriesToClosedChunks, long minSeqNo, int numClosedChunks,
+    public record IndexChunksResult(Map<Long, Set<MemChunk>> seriesRefToClosedChunks, long minSeqNo, int numClosedChunks,
         long minTimestamp) {
     }
 
-    /**
-     * For each key/series in the map, removes the chunks in the corresponding set from the series.
-     */
-    private void dropClosedChunks(Map<MemSeries, Set<MemChunk>> seriesToClosedChunks) {
-        for (Map.Entry<MemSeries, Set<MemChunk>> entry : seriesToClosedChunks.entrySet()) {
-            MemSeries series = entry.getKey();
-            series.dropClosedChunks(entry.getValue());
-        }
-    }
-
     private int dropEmptySeries(long minSeqNoToKeep) {
+
         List<Long> refs = new ArrayList<>();
         List<MemSeries> allSeries = seriesMap.getSeriesMap();
         for (MemSeries series : allSeries) {
@@ -823,19 +810,19 @@ public class Head implements Closeable {
     private class HeadChunkReader implements MemChunkReader {
 
         @Override
-        public List<ChunkIterator> getChunkIterators(long reference) {
+        public List<MemChunk> getChunks(long reference) {
             MemSeries series = seriesMap.getByReference(reference);
 
             if (series == null) {
                 return List.of();
             }
 
-            List<ChunkIterator> chunks = new ArrayList<>();
+            List<MemChunk> chunks = new ArrayList<>();
             series.lock();
             try {
                 MemChunk current = series.getHeadChunk();
                 while (current != null) {
-                    chunks.addAll(current.getCompoundChunk().getChunkIterators());
+                    chunks.add(current);
                     current = current.getPrev();
                 }
             } finally {
@@ -843,6 +830,22 @@ public class Head implements Closeable {
             }
 
             return chunks;
+        }
+    }
+
+    /**
+     * Returns a series reader for accessing mem series from the head storage.
+     *
+     * @return a HeadMemSeriesReader
+     */
+    public MemSeriesReader getMemSeriesReader() {
+        return new HeadMemSeriesReader();
+    }
+
+    private class HeadMemSeriesReader implements MemSeriesReader {
+        @Override
+        public MemSeries getMemSeries(long reference) {
+            return seriesMap.getByReference(reference);
         }
     }
 }

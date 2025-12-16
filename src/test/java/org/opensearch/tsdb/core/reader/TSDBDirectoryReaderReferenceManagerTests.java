@@ -29,6 +29,7 @@ import org.opensearch.tsdb.core.head.MemChunk;
 import org.opensearch.tsdb.core.index.ReaderManagerWithMetadata;
 import org.opensearch.tsdb.core.index.closed.ClosedChunkIndexManager;
 import org.opensearch.tsdb.core.index.live.MemChunkReader;
+import org.opensearch.tsdb.core.chunk.MMappedChunksManager;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -37,10 +38,15 @@ import org.opensearch.tsdb.core.mapping.LabelStorageType;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
 
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.anyLong;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -65,6 +71,7 @@ public class TSDBDirectoryReaderReferenceManagerTests extends OpenSearchTestCase
     private ReaderManagerWithMetadata closedReaderManager3;
     private ClosedChunkIndexManager closedChunkIndexManager;
     private MemChunkReader memChunkReader;
+    private MMappedChunksManager mmappedChunksManager;
     private ShardId shardId;
     private TSDBDirectoryReaderReferenceManager referenceManager;
     private List<MemChunk> memChunks;
@@ -86,10 +93,7 @@ public class TSDBDirectoryReaderReferenceManagerTests extends OpenSearchTestCase
         memChunks = new ArrayList<>();
 
         // Create mock MemChunkReader
-        memChunkReader = (reference) -> memChunks.stream()
-            .map(MemChunk::getCompoundChunk)
-            .flatMap(compoundChunk -> compoundChunk.getChunkIterators().stream())
-            .collect(Collectors.toList());
+        memChunkReader = (reference) -> memChunks;
 
         // Set up live index
         setupLiveIndex();
@@ -109,6 +113,13 @@ public class TSDBDirectoryReaderReferenceManagerTests extends OpenSearchTestCase
         closedChunkIndexManager = mock(ClosedChunkIndexManager.class);
 
         labelStorageType = LabelStorageType.BINARY;
+        // Mock MmappedChunksManager
+        mmappedChunksManager = mock(MMappedChunksManager.class);
+
+        // Setup consistent mmapped chunks map for all tests
+        Map<Long, Set<MemChunk>> emptyMmappedChunks = new HashMap<>();
+        when(mmappedChunksManager.getAllMMappedChunks()).thenReturn(emptyMmappedChunks);
+        doNothing().when(mmappedChunksManager).addReaderVersionToChunks(anyLong(), any());
     }
 
     private void setupLiveIndex() throws IOException {
@@ -210,6 +221,7 @@ public class TSDBDirectoryReaderReferenceManagerTests extends OpenSearchTestCase
             closedChunkIndexManager,
             memChunkReader,
             labelStorageType,
+            mmappedChunksManager,
             shardId
         );
 
@@ -240,12 +252,14 @@ public class TSDBDirectoryReaderReferenceManagerTests extends OpenSearchTestCase
         // Start with 2 closed indices
         when(closedChunkIndexManager.getReaderManagersWithMetadata()).thenReturn(Arrays.asList(closedReaderManager1, closedReaderManager2));
 
+        // Create TSDBDirectoryReaderReferenceManager
         referenceManager = new TSDBDirectoryReaderReferenceManager(
             liveReaderManager,
             () -> 0L,
             closedChunkIndexManager,
             memChunkReader,
             labelStorageType,
+            mmappedChunksManager,
             shardId
         );
 
@@ -294,12 +308,14 @@ public class TSDBDirectoryReaderReferenceManagerTests extends OpenSearchTestCase
         // Start with 1 closed chunk index
         when(closedChunkIndexManager.getReaderManagersWithMetadata()).thenReturn(Arrays.asList(closedReaderManager1));
 
+        // Create TSDBDirectoryReaderReferenceManager
         referenceManager = new TSDBDirectoryReaderReferenceManager(
             liveReaderManager,
             () -> 0L,
             closedChunkIndexManager,
             memChunkReader,
             labelStorageType,
+            mmappedChunksManager,
             shardId
         );
 
@@ -355,12 +371,14 @@ public class TSDBDirectoryReaderReferenceManagerTests extends OpenSearchTestCase
         );
         int initialRefCountForClosedReader3 = closedReader3.getRefCount();
 
+        // Create TSDBDirectoryReaderReferenceManager
         referenceManager = new TSDBDirectoryReaderReferenceManager(
             liveReaderManager,
             () -> 0L,
             closedChunkIndexManager,
             memChunkReader,
             labelStorageType,
+            mmappedChunksManager,
             shardId
         );
         assertEquals("Ref count to closedReader3 should increase by 1", initialRefCountForClosedReader3 + 1, closedReader3.getRefCount());
@@ -396,12 +414,14 @@ public class TSDBDirectoryReaderReferenceManagerTests extends OpenSearchTestCase
         // Set up with 2 closed indices
         when(closedChunkIndexManager.getReaderManagersWithMetadata()).thenReturn(Arrays.asList(closedReaderManager1, closedReaderManager2));
 
+        // Create TSDBDirectoryReaderReferenceManager
         referenceManager = new TSDBDirectoryReaderReferenceManager(
             liveReaderManager,
             () -> 0L,
             closedChunkIndexManager,
             memChunkReader,
             labelStorageType,
+            mmappedChunksManager,
             shardId
         );
 
@@ -436,12 +456,14 @@ public class TSDBDirectoryReaderReferenceManagerTests extends OpenSearchTestCase
         // Set up with 2 closed indices
         when(closedChunkIndexManager.getReaderManagersWithMetadata()).thenReturn(Arrays.asList(closedReaderManager1, closedReaderManager2));
 
+        // Create TSDBDirectoryReaderReferenceManager
         referenceManager = new TSDBDirectoryReaderReferenceManager(
             liveReaderManager,
             () -> 0L,
             closedChunkIndexManager,
             memChunkReader,
             labelStorageType,
+            mmappedChunksManager,
             shardId
         );
 
@@ -486,12 +508,14 @@ public class TSDBDirectoryReaderReferenceManagerTests extends OpenSearchTestCase
         // Start with 2 closed indices
         when(closedChunkIndexManager.getReaderManagersWithMetadata()).thenReturn(Arrays.asList(closedReaderManager1, closedReaderManager2));
 
+        // Create TSDBDirectoryReaderReferenceManager
         referenceManager = new TSDBDirectoryReaderReferenceManager(
             liveReaderManager,
             () -> 0L,
             closedChunkIndexManager,
             memChunkReader,
             labelStorageType,
+            mmappedChunksManager,
             shardId
         );
 
@@ -530,12 +554,14 @@ public class TSDBDirectoryReaderReferenceManagerTests extends OpenSearchTestCase
     public void testConcurrentRefreshOperations() throws IOException, InterruptedException {
         when(closedChunkIndexManager.getReaderManagersWithMetadata()).thenReturn(Arrays.asList(closedReaderManager1, closedReaderManager2));
 
+        // Create TSDBDirectoryReaderReferenceManager
         referenceManager = new TSDBDirectoryReaderReferenceManager(
             liveReaderManager,
             () -> 0L,
             closedChunkIndexManager,
             memChunkReader,
             labelStorageType,
+            mmappedChunksManager,
             shardId
         );
 
@@ -656,12 +682,14 @@ public class TSDBDirectoryReaderReferenceManagerTests extends OpenSearchTestCase
         int initialRefCountForClosedReader2 = closedReader2.getRefCount();
         int initialRefCountForLiveReader = liveReader.getRefCount();
 
+        // Create TSDBDirectoryReaderReferenceManager
         referenceManager = new TSDBDirectoryReaderReferenceManager(
             liveReaderManager,
             () -> 0L,
             closedChunkIndexManager,
             memChunkReader,
             labelStorageType,
+            mmappedChunksManager,
             shardId
         );
 
@@ -699,6 +727,54 @@ public class TSDBDirectoryReaderReferenceManagerTests extends OpenSearchTestCase
                 e.getMessage().contains("closed") || e.getMessage().contains("Closed")
             );
         }
+    }
+
+    @Test
+    public void testRefreshWhenMMappedChunksUnchanged() throws IOException {
+        // Set up with 1 closed index
+        when(closedChunkIndexManager.getReaderManagersWithMetadata()).thenReturn(Arrays.asList(closedReaderManager1));
+
+        // Create TSDBDirectoryReaderReferenceManager
+        referenceManager = new TSDBDirectoryReaderReferenceManager(
+            liveReaderManager,
+            () -> 0L,
+            closedChunkIndexManager,
+            memChunkReader,
+            labelStorageType,
+            mmappedChunksManager,
+            shardId
+        );
+
+        // Get initial reader
+        OpenSearchDirectoryReader initialReader = withAcquiredReader(reader -> reader);
+        TSDBDirectoryReader initialTSDBReader = (TSDBDirectoryReader) initialReader.getDelegate();
+        long initialVersion = initialTSDBReader.getVersion();
+
+        // Simulate that getAllMMappedChunks() returns the same chunks (equal content but different map instance)
+        Map<Long, Set<MemChunk>> unchangedChunks = new HashMap<>();
+        // Copy the current state to simulate no change
+        Map<Long, Set<MemChunk>> currentChunks = mmappedChunksManager.getAllMMappedChunks();
+        unchangedChunks.putAll(currentChunks);
+
+        // Mock getAllMMappedChunks to return the same content but different map instance
+        when(mmappedChunksManager.getAllMMappedChunks()).thenReturn(unchangedChunks);
+
+        // Trigger refresh - should not create a new reader since chunks are unchanged
+        try {
+            OpenSearchDirectoryReader newReader = referenceManager.refreshIfNeeded(initialReader);
+
+            // Should return null indicating no refresh was needed
+            assertNull("No refresh should occur when mMapped chunks are unchanged", newReader);
+
+        } catch (Exception e) {
+            fail("Refresh should not fail when chunks are unchanged: " + e.getMessage());
+        }
+
+        // Verify the reader version hasn't changed
+        withAcquiredReader(reader -> {
+            TSDBDirectoryReader currentTSDBReader = (TSDBDirectoryReader) reader.getDelegate();
+            assertEquals("Reader version should remain the same when no refresh occurs", initialVersion, currentTSDBReader.getVersion());
+        });
     }
 
     /**

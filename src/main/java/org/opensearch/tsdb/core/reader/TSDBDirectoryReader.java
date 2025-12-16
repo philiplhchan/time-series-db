@@ -7,8 +7,6 @@
  */
 package org.opensearch.tsdb.core.reader;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexCommit;
 import org.apache.lucene.index.IndexWriter;
@@ -17,6 +15,8 @@ import org.apache.lucene.index.LeafReaderContext;
 import org.opensearch.common.SuppressForbidden;
 import org.opensearch.common.lucene.index.OpenSearchDirectoryReader;
 import org.opensearch.tsdb.core.mapping.LabelStorageType;
+import org.opensearch.tsdb.core.chunk.MMappedChunksManager;
+import org.opensearch.tsdb.core.head.MemChunk;
 import org.opensearch.tsdb.core.index.closed.ClosedChunkIndexLeafReader;
 import org.opensearch.tsdb.core.index.live.LiveSeriesIndexLeafReader;
 import org.opensearch.tsdb.core.index.live.MemChunkReader;
@@ -26,6 +26,8 @@ import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.LongSupplier;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -42,22 +44,24 @@ import java.util.stream.Stream;
  */
 @SuppressForbidden(reason = "Reference managing is needed here")
 public class TSDBDirectoryReader extends DirectoryReader {
-    private static final Logger log = LogManager.getLogger(TSDBDirectoryReader.class);
     private final DirectoryReader liveSeriesIndexDirectoryReader;
     private final LongSupplier minLiveTimestampSupplier;
     private final List<DirectoryReaderWithMetadata> closedChunkIndexReadersWithMetadata;
     private final MemChunkReader memChunkReader;
     private final LabelStorageType labelStorageType;
+    private final Map<Long, Set<MemChunk>> mMappedChunks;
+    private final MMappedChunksManager mMappedChunksManager;
     private final long version;
 
     /**
      * Constructs a TSDBDirectoryReader that combines a live series index reader with metadata for pruning
-     * @param liveReader the DirectoryReaderWithMetadata for the live series index
-     * @param minLiveTimestampSupplier supplies the current minimum possible timestamp of an in-memory sample
+     *
+     * @param liveReader                          the DirectoryReaderWithMetadata for the live series index
+     * @param minLiveTimestampSupplier            supplies the current minimum possible timestamp of an in-memory sample
      * @param closedChunkIndexReadersWithMetadata list of DirectoryReaderWithMetadata for closed chunk indices
-     * @param memChunkReader reader to read MemChunk from reference, this is needed for LiveSeriesIndexLeafReader
-     * @param labelStorageType the storage type configured for labels
-     * @param version the version of this reader instance. Version will be increased by 1 for each refresh
+     * @param memChunkReader                      reader to read MemChunk from reference, this is needed for LiveSeriesIndexLeafReader
+     * @param labelStorageType                    the storage type configured for labels
+     * @param version                             the version of this reader instance. Version will be increased by 1 for each refresh
      * @throws IOException if an I/O error occurs during construction
      */
     public TSDBDirectoryReader(
@@ -65,6 +69,8 @@ public class TSDBDirectoryReader extends DirectoryReader {
         LongSupplier minLiveTimestampSupplier,
         List<DirectoryReaderWithMetadata> closedChunkIndexReadersWithMetadata,
         MemChunkReader memChunkReader,
+        Map<Long, Set<MemChunk>> mMappedChunks,
+        MMappedChunksManager mMappedChunksManager,
         LabelStorageType labelStorageType,
         long version
     ) throws IOException {
@@ -84,6 +90,7 @@ public class TSDBDirectoryReader extends DirectoryReader {
                 minLiveTimestampSupplier.getAsLong(),
                 closedChunkIndexReadersWithMetadata,
                 memChunkReader,
+                mMappedChunks,
                 labelStorageType
             ),
             null
@@ -101,24 +108,68 @@ public class TSDBDirectoryReader extends DirectoryReader {
         for (DirectoryReaderWithMetadata readerWithMetadata : this.closedChunkIndexReadersWithMetadata) {
             readerWithMetadata.reader().incRef();
         }
+        this.mMappedChunks = mMappedChunks;
+        this.mMappedChunksManager = mMappedChunksManager;
         this.version = version;
     }
 
     /**
-     * Constructs a TSDBDirectoryReader that combines a live series index reader
-     * @param liveReader the DirectoryReaderWithMetadata for the live series index
+     * Constructs a TSDBDirectoryReader that combines a live series index reader and closed chunk index readers with default  label storage type
+     *
+     * @param liveReader               the DirectoryReaderWithMetadata for the live series index
      * @param minLiveTimestampSupplier supplies the current minimum possible timestamp of an in-memory sample
-     * @param closedChunkIndexReaders list of DirectoryReaderWithMetadata for closed chunk indices
-     * @param memChunkReader reader to read MemChunk from reference, this is needed for LiveSeriesIndexLeafReader
+     * @param closedChunkIndexReaders  list of DirectoryReaderWithMetadata for closed chunk indices
+     * @param memChunkReader           reader to read MemChunk from reference, this is needed for LiveSeriesIndexLeafReader
      * @throws IOException if an I/O error occurs during construction
      */
     public TSDBDirectoryReader(
         DirectoryReader liveReader,
         LongSupplier minLiveTimestampSupplier,
         List<DirectoryReaderWithMetadata> closedChunkIndexReaders,
-        MemChunkReader memChunkReader
+        MemChunkReader memChunkReader,
+        Map<Long, Set<MemChunk>> mMappedChunks,
+        MMappedChunksManager mMappedChunksManager,
+        long version
     ) throws IOException {
-        this(liveReader, minLiveTimestampSupplier, closedChunkIndexReaders, memChunkReader, LabelStorageType.SORTED_SET, 0L);
+        this(
+            liveReader,
+            minLiveTimestampSupplier,
+            closedChunkIndexReaders,
+            memChunkReader,
+            mMappedChunks,
+            mMappedChunksManager,
+            LabelStorageType.BINARY,
+            version
+        );
+    }
+
+    /**
+     * Constructs a TSDBDirectoryReader that combines a live series index reader and closed chunk index readers with default  version
+     * @param liveReader               the DirectoryReaderWithMetadata for the live series index
+     * @param minLiveTimestampSupplier supplies the current minimum possible timestamp of an in-memory sample
+     * @param closedChunkIndexReaders  list of DirectoryReaderWithMetadata for closed chunk indices
+     * @param memChunkReader           reader to read MemChunk from reference, this is needed for LiveSeriesIndexLeafReader
+     * @throws IOException if an I/O error occurs during construction
+     */
+    public TSDBDirectoryReader(
+        DirectoryReader liveReader,
+        LongSupplier minLiveTimestampSupplier,
+        List<DirectoryReaderWithMetadata> closedChunkIndexReaders,
+        MemChunkReader memChunkReader,
+        Map<Long, Set<MemChunk>> mMappedChunks,
+        MMappedChunksManager mMappedChunksManager,
+        LabelStorageType labelStorageType
+    ) throws IOException {
+        this(
+            liveReader,
+            minLiveTimestampSupplier,
+            closedChunkIndexReaders,
+            memChunkReader,
+            mMappedChunks,
+            mMappedChunksManager,
+            labelStorageType,
+            0L
+        );
     }
 
     /**
@@ -129,6 +180,7 @@ public class TSDBDirectoryReader extends DirectoryReader {
         long minLiveTimestamp,
         List<DirectoryReaderWithMetadata> closedChunkIndexReadersWithMetadata,
         MemChunkReader memChunkReader,
+        Map<Long, Set<MemChunk>> mMappedChunks,
         LabelStorageType labelStorageType
     ) throws IOException {
         List<LeafReader> combined = new ArrayList<>();
@@ -136,7 +188,7 @@ public class TSDBDirectoryReader extends DirectoryReader {
         // Add live series leaf readers
         for (LeafReaderContext ctx : liveDirectoryReader.leaves()) {
             // TODO : pass in already mmaped chunks
-            combined.add(new LiveSeriesIndexLeafReader(ctx.reader(), memChunkReader, labelStorageType, minLiveTimestamp));
+            combined.add(new LiveSeriesIndexLeafReader(ctx.reader(), memChunkReader, labelStorageType, minLiveTimestamp, mMappedChunks));
         }
 
         // Add closed chunk leaf readers with metadata
@@ -263,6 +315,8 @@ public class TSDBDirectoryReader extends DirectoryReader {
                 minLiveTimestampSupplier,
                 newClosedChunkReadersWithMetadata,
                 memChunkReader,
+                mMappedChunks,
+                mMappedChunksManager,
                 this.labelStorageType,
                 version + 1
             );
@@ -310,6 +364,9 @@ public class TSDBDirectoryReader extends DirectoryReader {
 
     @Override
     protected synchronized void doClose() throws IOException {
+        // remove current reader version from mmaped chunk manager
+        // if no reference to the mmapped chunks anymore , they will be dropped from live index
+        mMappedChunksManager.removeMMappedChunksForReaderVersion(this.version, mMappedChunks);
         IOException firstException = null;
         try {
             this.liveSeriesIndexDirectoryReader.decRef();

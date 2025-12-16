@@ -284,4 +284,43 @@ public class MemChunkTests extends OpenSearchTestCase {
         result = chunk.getCompoundChunk().toChunk();
         TestUtils.assertIteratorEquals(result.iterator(), List.of(1000L, 2000L, 3000L, 5000L), List.of(1.0, 2.0, 3.0, 5.0));
     }
+
+    public void testIsClosedDefaultsToFalse() {
+        MemChunk chunk = new MemChunk(1L, 1000L, 2000L, null, Encoding.XOR);
+        assertFalse("New chunks should not be closed", chunk.isClosed());
+    }
+
+    public void testSetClosed() {
+        MemChunk chunk = new MemChunk(1L, 1000L, 2000L, null, Encoding.XOR);
+
+        // Initially not closed
+        assertFalse(chunk.isClosed());
+
+        // Set to closed
+        chunk.setClosed(true);
+        assertTrue("Chunk should be marked as closed", chunk.isClosed());
+
+        // Set back to not closed
+        chunk.setClosed(false);
+        assertFalse("Chunk should be marked as not closed", chunk.isClosed());
+    }
+
+    public void testClosedStateIndependentBetweenChunks() {
+        MemChunk chunk1 = new MemChunk(1L, 1000L, 2000L, null, Encoding.XOR);
+        MemChunk chunk2 = new MemChunk(2L, 2000L, 3000L, chunk1, Encoding.XOR);
+
+        // Initially both not closed
+        assertFalse(chunk1.isClosed());
+        assertFalse(chunk2.isClosed());
+
+        // Close only chunk1
+        chunk1.setClosed(true);
+        assertTrue("Chunk1 should be closed", chunk1.isClosed());
+        assertFalse("Chunk2 should still be open", chunk2.isClosed());
+
+        // Close chunk2
+        chunk2.setClosed(true);
+        assertTrue("Chunk1 should still be closed", chunk1.isClosed());
+        assertTrue("Chunk2 should now be closed", chunk2.isClosed());
+    }
 }

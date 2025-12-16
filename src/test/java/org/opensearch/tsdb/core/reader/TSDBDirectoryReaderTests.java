@@ -35,7 +35,12 @@ import org.opensearch.common.SuppressForbidden;
 import org.opensearch.test.OpenSearchTestCase;
 import org.opensearch.tsdb.core.chunk.Encoding;
 import org.opensearch.tsdb.core.head.MemChunk;
+import org.opensearch.tsdb.core.head.MemSeries;
+import org.opensearch.tsdb.core.head.ChunkOptions;
+import org.opensearch.tsdb.core.head.MemSeriesReader;
 import org.opensearch.tsdb.core.index.ReaderManagerWithMetadata;
+import org.opensearch.tsdb.core.model.Labels;
+import org.opensearch.tsdb.core.chunk.MMappedChunksManager;
 import org.opensearch.tsdb.core.index.closed.ClosedChunkIndexIO;
 import org.opensearch.tsdb.core.index.closed.ClosedChunkIndexLeafReader;
 import org.opensearch.tsdb.core.index.closed.ClosedChunkIndexManager;
@@ -53,9 +58,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 import static org.mockito.Mockito.mock;
+import java.util.Set;
+import java.util.HashMap;
 import static org.mockito.Mockito.when;
 
 /**
@@ -81,6 +87,8 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
     private ReaderManagerWithMetadata closedReaderManager3;
     private Map<Long, List<MemChunk>> referenceToMemChunkMap;
     private LabelStorageType labelStorageType;
+    private Map<Long, Set<MemChunk>> mmappedChunks;
+    private MMappedChunksManager mmappedChunksManager;
 
     @Before
     public void setUp() throws Exception {
@@ -91,14 +99,14 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
         closedDirectory2 = new ByteBuffersDirectory();
         closedDirectory3 = new ByteBuffersDirectory();
         closedChunkIndexManager = mock(ClosedChunkIndexManager.class);
+        mmappedChunksManager = mock(MMappedChunksManager.class);
+
+        // Setup empty mmapped chunks for testing
+        mmappedChunks = new HashMap<>();
 
         // Initialize memChunks list for testing
         referenceToMemChunkMap = this.getMemChunksForLiveIndex();
-        memChunkReader = (reference) -> referenceToMemChunkMap.getOrDefault(reference, new ArrayList<>())
-            .stream()
-            .map(MemChunk::getCompoundChunk)
-            .flatMap(compoundChunk -> compoundChunk.getChunkIterators().stream())
-            .collect(Collectors.toList());
+        memChunkReader = (reference) -> referenceToMemChunkMap.getOrDefault(reference, new ArrayList<>());
 
         // Create some test documents for live index (similar to LiveSeriesIndex)
         liveWriter = new IndexWriter(liveDirectory, new IndexWriterConfig(new WhitespaceAnalyzer()));
@@ -205,7 +213,10 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
             liveReader,
             () -> expectedMinLiveTimestamp,
             Arrays.asList(closedReader1, closedReader2, closedReader3),
-            memChunkReader
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            0L
         );
 
         // Leaves are ordered: live leaves, then closed1 leaves, then closed2 leaves, then closed3 leaves
@@ -274,7 +285,15 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
         int initialLiveRefCount = liveReader.getRefCount();
         int initialClosedRefCount = closedReader1.reader().getRefCount();
 
-        tsdbDirectoryReader = new TSDBDirectoryReader(liveReader, () -> 0L, Arrays.asList(closedReader1), memChunkReader);
+        tsdbDirectoryReader = new TSDBDirectoryReader(
+            liveReader,
+            () -> 0L,
+            Arrays.asList(closedReader1),
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
+        );
 
         // Reference counts should be incremented by the constructor
         assertEquals("Live reader reference count should be incremented by 1", initialLiveRefCount + 1, liveReader.getRefCount());
@@ -297,7 +316,10 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
             liveReader,
             () -> 0L,
             Arrays.asList(closedReader1, closedReader2, closedReader3),
-            memChunkReader
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
         );
 
         // Reference counts should be incremented by the constructor
@@ -326,7 +348,10 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
             liveReader,
             () -> 0L,
             Arrays.asList(closedReader1, closedReader2, closedReader3),
-            memChunkReader
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
         );
 
         // Get expected leaf count
@@ -347,7 +372,10 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
             liveReader,
             () -> 0L,
             Arrays.asList(closedReader1, closedReader2, closedReader3),
-            memChunkReader
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
         );
 
         int expectedMaxDoc = liveReader.maxDoc() + closedReader1.reader().maxDoc() + closedReader2.reader().maxDoc() + closedReader3
@@ -364,7 +392,10 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
             liveReader,
             () -> 0L,
             Arrays.asList(closedReader1, closedReader2, closedReader3),
-            memChunkReader
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
         );
 
         int expectedNumDocs = liveReader.numDocs() + closedReader1.reader().numDocs() + closedReader2.reader().numDocs() + closedReader3
@@ -381,7 +412,10 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
             liveReader,
             () -> 0L,
             Arrays.asList(closedReader1, closedReader2, closedReader3),
-            memChunkReader
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            0L
         );
 
         // With the new versioning system, TSDBDirectoryReader uses its own version counter
@@ -395,6 +429,8 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
             () -> 0L,
             Arrays.asList(closedReader1, closedReader2, closedReader3),
             memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
             LabelStorageType.BINARY,
             5L
         );
@@ -408,7 +444,10 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
             liveReader,
             () -> 0L,
             Arrays.asList(closedReader1, closedReader2, closedReader3),
-            memChunkReader
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
         );
 
         boolean expectedIsCurrent = liveReader.isCurrent()
@@ -440,7 +479,10 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
             liveReader,
             () -> 0L,
             Arrays.asList(closedReader1, closedReader2, closedReader3),
-            memChunkReader
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
         );
         assertEquals("Initial reference count should be 1", 1, tsdbDirectoryReader.getRefCount());
         assertEquals("Live reader reference count should be incremented by 1", initialLiveRefCount + 1, liveReader.getRefCount());
@@ -538,7 +580,10 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
                 liveReader,
                 () -> 0L,
                 Arrays.asList(closedReader1, closedReader2, closedReader3),
-                memChunkReader
+                memChunkReader,
+                mmappedChunks,
+                mmappedChunksManager,
+                1L
             );
 
             // Verify ref counts were incremented during construction
@@ -588,6 +633,157 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
     }
 
     @Test
+    public void testDoCloseDropsMMappedChunks() throws IOException {
+        // Create real MemSeries with actual chunks
+        MemSeries series1 = createMemSeriesWithChunks(1001L, "service", "api");
+        MemSeries series2 = createMemSeriesWithChunks(1002L, "service", "db");
+
+        // Create real MemSeriesReader
+        Map<Long, MemSeries> seriesMap = Map.of(1001L, series1, 1002L, series2);
+
+        MemSeriesReader realMemSeriesReader = new MemSeriesReader() {
+            @Override
+            public MemSeries getMemSeries(long reference) {
+                return seriesMap.get(reference);
+            }
+        };
+
+        // Setup mmapped chunks manager with real MemSeriesReader
+        MMappedChunksManager realMmappedChunksManager = new MMappedChunksManager(realMemSeriesReader);
+        long readerVersion = 123L;
+
+        // Get chunks from the series to set up as mmapped
+        MemChunk firstChunk = series1.getHeadChunk().oldest();
+        MemChunk secondChunk = firstChunk.getNext();
+
+        Map<Long, Set<MemChunk>> testMmappedChunks = new HashMap<>();
+        testMmappedChunks.put(1001L, Set.of(firstChunk, secondChunk));
+
+        // Record initial chunk counts
+        int initialSeries1ChunkCount = series1.getHeadChunk().len();
+        int initialSeries2ChunkCount = series2.getHeadChunk().len();
+
+        // Add chunks to manager and associate with reader version
+        realMmappedChunksManager.addMMappedChunks(testMmappedChunks);
+        realMmappedChunksManager.addReaderVersionToChunks(readerVersion, testMmappedChunks);
+
+        // Create TSDBDirectoryReader with real mmapped chunks manager
+        tsdbDirectoryReader = new TSDBDirectoryReader(
+            liveReader,
+            () -> 0L,
+            Arrays.asList(closedReader1, closedReader2, closedReader3),
+            memChunkReader,
+            testMmappedChunks,
+            realMmappedChunksManager,
+            LabelStorageType.BINARY,
+            readerVersion
+        );
+
+        // Verify chunks are present before close
+        Map<Long, Set<MemChunk>> chunksBeforeClose = realMmappedChunksManager.getAllMMappedChunks();
+        assertFalse("Chunks should be present before close", chunksBeforeClose.isEmpty());
+        assertEquals("Should have chunks for series 1001L", 2, chunksBeforeClose.get(1001L).size());
+
+        // Close the reader - this should trigger actual chunk dropping
+        tsdbDirectoryReader.close();
+
+        // Verify chunks were actually dropped from MemSeries
+        int finalSeries1ChunkCount = series1.getHeadChunk() != null ? series1.getHeadChunk().len() : 0;
+        int finalSeries2ChunkCount = series2.getHeadChunk() != null ? series2.getHeadChunk().len() : 0;
+
+        assertEquals("Series1 should have 2 fewer chunks after dropping", initialSeries1ChunkCount - 2, finalSeries1ChunkCount);
+        assertEquals("Series2 should be unchanged", initialSeries2ChunkCount, finalSeries2ChunkCount);
+
+        // Verify the specific chunks were removed from series1
+        MemChunk remainingHead = series1.getHeadChunk();
+        if (remainingHead != null) {
+            // Traverse remaining chunks to ensure dropped chunks are not present
+            MemChunk current = remainingHead.oldest();
+            while (current != null) {
+                assertNotSame("First chunk should not be in the list", firstChunk, current);
+                assertNotSame("Second chunk should not be in the list", secondChunk, current);
+                current = current.getNext();
+            }
+        }
+    }
+
+    @Test
+    public void testDoCloseWithMultipleReaderVersions() throws IOException {
+        // Test that mmapped chunks are only dropped when no readers reference them
+        MemSeries series1 = createMemSeriesWithChunks(2001L, "service", "web");
+
+        // Create real MemSeriesReader
+        Map<Long, MemSeries> seriesMap = Map.of(2001L, series1);
+        MemSeriesReader realMemSeriesReader = new MemSeriesReader() {
+            @Override
+            public MemSeries getMemSeries(long reference) {
+                return seriesMap.get(reference);
+            }
+        };
+
+        MMappedChunksManager realMmappedChunksManager = new MMappedChunksManager(realMemSeriesReader);
+        long readerVersion1 = 100L;
+        long readerVersion2 = 200L;
+
+        // Get chunks from the series
+        MemChunk firstChunk = series1.getHeadChunk().oldest();
+        MemChunk secondChunk = firstChunk.getNext();
+
+        Map<Long, Set<MemChunk>> testMmappedChunks = new HashMap<>();
+        testMmappedChunks.put(2001L, Set.of(firstChunk, secondChunk));
+
+        int initialChunkCount = series1.getHeadChunk().len();
+
+        // Add chunks and associate with two different reader versions
+        realMmappedChunksManager.addMMappedChunks(testMmappedChunks);
+        realMmappedChunksManager.addReaderVersionToChunks(readerVersion1, testMmappedChunks);
+        realMmappedChunksManager.addReaderVersionToChunks(readerVersion2, testMmappedChunks);
+
+        // Create two readers with different versions
+        TSDBDirectoryReader reader1 = new TSDBDirectoryReader(
+            liveReader,
+            () -> 0L,
+            Arrays.asList(closedReader1),
+            memChunkReader,
+            testMmappedChunks,
+            realMmappedChunksManager,
+            readerVersion1
+        );
+
+        TSDBDirectoryReader reader2 = new TSDBDirectoryReader(
+            liveReader,
+            () -> 0L,
+            Arrays.asList(closedReader2),
+            memChunkReader,
+            testMmappedChunks,
+            realMmappedChunksManager,
+            readerVersion2
+        );
+
+        // Close first reader - chunks should not be available to new readers anymore
+        reader1.close();
+        Map<Long, Set<MemChunk>> chunksAfterFirstClose = realMmappedChunksManager.getAllMMappedChunks();
+        assertTrue("Chunks are removed because first reader is closed", chunksAfterFirstClose.isEmpty());
+
+        // Verify chunks are not dropped from MemSeries yet
+        int chunkCount = series1.getHeadChunk() != null ? series1.getHeadChunk().len() : 0;
+        assertEquals(
+            "Chunks count should be the same as initial chunk count as no chunk are dropped from memSeries yet",
+            initialChunkCount,
+            chunkCount
+        );
+
+        // Close second reader
+        reader2.close();
+        Map<Long, Set<MemChunk>> chunksAfterSecondClose = realMmappedChunksManager.getAllMMappedChunks();
+        assertTrue("Chunks should stay empty", chunksAfterSecondClose.isEmpty());
+
+        // Verify chunks are now dropped from MemSeries
+        int finalChunkCount = series1.getHeadChunk() != null ? series1.getHeadChunk().len() : 0;
+        assertEquals("2 chunks should be dropped after all readers are closed", initialChunkCount - 2, finalChunkCount);
+    }
+
+    @Test
     public void testDoOpenIfChangedWithNoChanges() throws IOException {
         // Set up mock to return the same reader managers that match the closed readers
         when(closedChunkIndexManager.getReaderManagersWithMetadata()).thenReturn(
@@ -598,7 +794,10 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
             liveReader,
             () -> 0L,
             Arrays.asList(closedReader1, closedReader2, closedReader3),
-            memChunkReader
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
         );
 
         // Test when no changes occurred
@@ -609,7 +808,15 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
 
     @Test
     public void testDoOpenIfChangedWithLiveIndexChanges() throws IOException {
-        tsdbDirectoryReader = new TSDBDirectoryReader(liveReader, () -> 0L, Arrays.asList(closedReader1, closedReader2), memChunkReader);
+        tsdbDirectoryReader = new TSDBDirectoryReader(
+            liveReader,
+            () -> 0L,
+            Arrays.asList(closedReader1, closedReader2),
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
+        );
 
         // Verify initial document count
         int initialDocCount = tsdbDirectoryReader.numDocs();
@@ -655,25 +862,57 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
 
     @Test(expected = UnsupportedEncodingException.class)
     public void testDoOpenIfChangedWithIndexCommitThrowsException() throws IOException {
-        tsdbDirectoryReader = new TSDBDirectoryReader(liveReader, () -> 0L, Arrays.asList(closedReader1), memChunkReader);
+        tsdbDirectoryReader = new TSDBDirectoryReader(
+            liveReader,
+            () -> 0L,
+            Arrays.asList(closedReader1),
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
+        );
         tsdbDirectoryReader.doOpenIfChanged(null); // IndexCommit parameter
     }
 
     @Test(expected = UnsupportedEncodingException.class)
     public void testDoOpenIfChangedWithIndexWriterThrowsException() throws IOException {
-        tsdbDirectoryReader = new TSDBDirectoryReader(liveReader, () -> 0L, Arrays.asList(closedReader1), memChunkReader);
+        tsdbDirectoryReader = new TSDBDirectoryReader(
+            liveReader,
+            () -> 0L,
+            Arrays.asList(closedReader1),
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
+        );
         tsdbDirectoryReader.doOpenIfChanged(null, false); // IndexWriter parameter
     }
 
     @Test(expected = UnsupportedOperationException.class)
     public void testGetIndexCommitThrowsException() throws IOException {
-        tsdbDirectoryReader = new TSDBDirectoryReader(liveReader, () -> 0L, Arrays.asList(closedReader1), memChunkReader);
+        tsdbDirectoryReader = new TSDBDirectoryReader(
+            liveReader,
+            () -> 0L,
+            Arrays.asList(closedReader1),
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
+        );
         tsdbDirectoryReader.getIndexCommit();
     }
 
     @Test
     public void testGetReaderCacheHelperReturnsNull() throws IOException {
-        tsdbDirectoryReader = new TSDBDirectoryReader(liveReader, () -> 0L, Arrays.asList(closedReader1, closedReader2), memChunkReader);
+        tsdbDirectoryReader = new TSDBDirectoryReader(
+            liveReader,
+            () -> 0L,
+            Arrays.asList(closedReader1, closedReader2),
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
+        );
 
         assertNull("CacheHelper should return null", tsdbDirectoryReader.getReaderCacheHelper());
     }
@@ -684,7 +923,10 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
             liveReader,
             () -> 0L,
             Arrays.asList(closedReader1, closedReader2, closedReader3),
-            memChunkReader
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
         );
 
         // Close multiple times should not throw exceptions
@@ -739,6 +981,8 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
                 () -> 0L,
                 Arrays.asList(emptyClosedMeta1, emptyClosedMeta2, emptyClosedMeta3),
                 memChunkReader,
+                mmappedChunks,
+                mmappedChunksManager,
                 labelStorageType,
                 0L
             );
@@ -763,7 +1007,15 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
 
     @Test
     public void testConcurrentAccess() throws IOException {
-        tsdbDirectoryReader = new TSDBDirectoryReader(liveReader, () -> 0L, Arrays.asList(closedReader1, closedReader2), memChunkReader);
+        tsdbDirectoryReader = new TSDBDirectoryReader(
+            liveReader,
+            () -> 0L,
+            Arrays.asList(closedReader1, closedReader2),
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
+        );
 
         // Test that multiple incRef/decRef operations work correctly
         List<Thread> threads = new ArrayList<>();
@@ -806,7 +1058,15 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
 
     @Test
     public void testDirectory() throws IOException {
-        tsdbDirectoryReader = new TSDBDirectoryReader(liveReader, () -> 0L, Arrays.asList(closedReader1, closedReader2), memChunkReader);
+        tsdbDirectoryReader = new TSDBDirectoryReader(
+            liveReader,
+            () -> 0L,
+            Arrays.asList(closedReader1, closedReader2),
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
+        );
 
         // The directory should be a CompositeDirectory
         assertNotNull("Directory should not be null", tsdbDirectoryReader.directory());
@@ -815,9 +1075,16 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
 
     @Test
     public void testTryIncRefAfterClose() throws IOException {
-        tsdbDirectoryReader = new TSDBDirectoryReader(liveReader, () -> 0L, Arrays.asList(closedReader1, closedReader2), memChunkReader);
+        tsdbDirectoryReader = new TSDBDirectoryReader(
+            liveReader,
+            () -> 0L,
+            Arrays.asList(closedReader1, closedReader2),
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
+        );
         tsdbDirectoryReader.close();
-
         // tryIncRef should return false for closed reader
         assertFalse("tryIncRef should return false for closed reader", tsdbDirectoryReader.tryIncRef());
     }
@@ -828,7 +1095,10 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
             liveReader,
             () -> 0L,
             Arrays.asList(closedReader1, closedReader2, closedReader3),
-            memChunkReader
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
         );
 
         // Create an IndexSearcher using the TSDBDirectoryReader
@@ -861,7 +1131,10 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
             liveReader,
             () -> 0L,
             Arrays.asList(closedReader1, closedReader2, closedReader3),
-            memChunkReader
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
         );
         assertEquals("Should have 3 closed chunk readers", 3, tsdbDirectoryReader.getClosedChunkReadersCount());
     }
@@ -873,7 +1146,10 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
             liveReader,
             () -> 0L,
             Arrays.asList(closedReader1, closedReader2, closedReader3),
-            memChunkReader
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
         );
 
         // Create an IndexSearcher using the TSDBDirectoryReader
@@ -910,7 +1186,15 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
         // This test verifies that the doClose method properly handles multiple readers
         // and that it can complete successfully under normal conditions
 
-        tsdbDirectoryReader = new TSDBDirectoryReader(liveReader, () -> 0L, Arrays.asList(closedReader1, closedReader2), memChunkReader);
+        tsdbDirectoryReader = new TSDBDirectoryReader(
+            liveReader,
+            () -> 0L,
+            Arrays.asList(closedReader1, closedReader2),
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
+        );
 
         // Verify initial state
         assertEquals("Should have reference count of 1", 1, tsdbDirectoryReader.getRefCount());
@@ -941,8 +1225,15 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
      */
     @Test
     public void testDoOpenIfChangedSuccessPath() throws IOException {
-        tsdbDirectoryReader = new TSDBDirectoryReader(liveReader, () -> 0L, Arrays.asList(closedReader1, closedReader2), memChunkReader);
-
+        tsdbDirectoryReader = new TSDBDirectoryReader(
+            liveReader,
+            () -> 0L,
+            Arrays.asList(closedReader1, closedReader2),
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
+        );
         // Record initial refCounts
         int initialLiveRefCount = liveReader.getRefCount();
         int initialClosed1RefCount = closedReader1.reader().getRefCount();
@@ -1055,6 +1346,8 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
                 new DirectoryReaderWithMetadata(throwingClosedChunkReader2, 0L, 0L)
             ),
             memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
             labelStorageType,
             0L
         );
@@ -1114,7 +1407,15 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
      */
     @Test
     public void testDoOpenIfChangedProperlyDecRefsNewReaders() throws IOException {
-        tsdbDirectoryReader = new TSDBDirectoryReader(liveReader, () -> 0L, Arrays.asList(closedReader1, closedReader2), memChunkReader);
+        tsdbDirectoryReader = new TSDBDirectoryReader(
+            liveReader,
+            () -> 0L,
+            Arrays.asList(closedReader1, closedReader2),
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
+        );
 
         // Capture initial reference counts before refresh
         DirectoryReader initialLiveReader = liveReader;
@@ -1206,7 +1507,15 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
      */
     @Test
     public void testDoOpenIfChangedProperlyDecRefsNewClosedChunkReaders() throws IOException {
-        tsdbDirectoryReader = new TSDBDirectoryReader(liveReader, () -> 0L, Arrays.asList(closedReader1, closedReader2), memChunkReader);
+        tsdbDirectoryReader = new TSDBDirectoryReader(
+            liveReader,
+            () -> 0L,
+            Arrays.asList(closedReader1, closedReader2),
+            memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
+            1L
+        );
 
         // Capture initial reference counts before refresh
         DirectoryReader initialClosedReader1 = closedReader1.reader();
@@ -1305,6 +1614,8 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
                 new DirectoryReaderWithMetadata(throwingClosedChunkReader2, 0L, 0L)
             ),
             memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
             labelStorageType,
             0L
         );
@@ -1446,6 +1757,8 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
                 new DirectoryReaderWithMetadata(throwingClosedChunkReader2, 0L, 0L)
             ),
             memChunkReader,
+            mmappedChunks,
+            mmappedChunksManager,
             labelStorageType,
             0L
         );
@@ -1542,5 +1855,32 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
             memChunk.append(i, value, 0L);
         }
         return memChunk;
+    }
+
+    /**
+     * Helper method to create a MemSeries with multiple chunks for testing
+     */
+    private MemSeries createMemSeriesWithChunks(long reference, String labelName, String labelValue) {
+        Labels labels = org.opensearch.tsdb.core.model.ByteLabels.fromStrings(labelName, labelValue);
+        MemSeries series = new MemSeries(reference, labels);
+
+        // Create ChunkOptions with a time range that will create multiple chunks
+        ChunkOptions options = new ChunkOptions(1000, 8); // 1000ms range, 8 samples per chunk
+
+        long seqNo = 1;
+
+        // Add multiple chunks worth of data to the series
+        for (int i = 0; i < 4; i++) {
+            long chunkStartTime = i * 1000L; // Each chunk covers 1000ms
+
+            // Add sample data to create this chunk
+            for (int j = 0; j < 5; j++) {
+                long timestamp = chunkStartTime + (j * 200); // 200ms intervals
+                double value = i * 10.0 + j;
+                series.append(seqNo++, timestamp, value, options);
+            }
+        }
+
+        return series;
     }
 }

@@ -46,6 +46,7 @@ import org.opensearch.index.translog.TranslogOperationHelper;
 import org.opensearch.index.translog.listener.TranslogEventListener;
 import org.opensearch.search.suggest.completion.CompletionStats;
 import org.opensearch.tsdb.MetadataStore;
+import org.opensearch.tsdb.core.chunk.MMappedChunksManager;
 import org.opensearch.tsdb.core.compaction.CompactionFactory;
 import org.opensearch.tsdb.core.head.Appender;
 import org.opensearch.tsdb.core.head.Head;
@@ -110,6 +111,7 @@ public class TSDBEngine extends Engine {
     private Path metricsStorePath;
     private ReferenceManager<OpenSearchDirectoryReader> tsdbReaderManager;
     private final MetadataStore metadataStore;
+    private final MMappedChunksManager mappedChunksManager;
 
     private volatile SegmentInfos lastCommittedSegmentInfos;
 
@@ -205,7 +207,9 @@ public class TSDBEngine extends Engine {
             final Map<String, String> userData = lastCommittedSegmentInfos.getUserData();
             // Read history UUID directly from userData (avoid protected API)
             this.historyUUID = userData.get(Engine.HISTORY_UUID_KEY);
+            this.mappedChunksManager = new MMappedChunksManager(head.getMemSeriesReader());
             this.tsdbReaderManager = getTSDBReaderManager();
+
             success = true;
         } finally {
             if (success == false) {
@@ -617,7 +621,12 @@ public class TSDBEngine extends Engine {
             // This will be used if the returned checkpoint is Long.MAX_VALUE, indicating all chunks at that time is closed.
             long currentProcessedCheckpoint = localCheckpointTracker.getProcessedCheckpoint();
 
-            long checkpoint = head.closeHeadChunks(postRecoveryRefreshCompleted);
+            Head.IndexChunksResult indexChunksResult = head.closeHeadChunks(postRecoveryRefreshCompleted);
+            long minSeqNo = indexChunksResult.minSeqNo();
+            long checkpoint = minSeqNo == Long.MAX_VALUE ? Long.MAX_VALUE : minSeqNo - 1;
+
+            // add already mmaped chunks to manager
+            this.mappedChunksManager.addMMappedChunks(indexChunksResult.seriesRefToClosedChunks());
 
             // checkpoint is Long.MAX_VALUE if all chunks are closed. In this case, use processed checkpoint before closing the chunks
             if (checkpoint == Long.MAX_VALUE) {
@@ -1167,6 +1176,13 @@ public class TSDBEngine extends Engine {
     }
 
     /**
+     * @return the MMappedChunksManager instance
+     * */
+    protected MMappedChunksManager getMMappedChunksManager() {
+        return mappedChunksManager;
+    }
+
+    /**
      * Commits segment information to disk with updated checkpoint data.
      *
      * @param checkpoint the local checkpoint to commit
@@ -1291,6 +1307,7 @@ public class TSDBEngine extends Engine {
                 closedChunkIndexManager,
                 head.getChunkReader(),
                 head.getLiveSeriesIndex().getLabelStorageType(),
+                mappedChunksManager,
                 shardId
             );
 

@@ -160,11 +160,18 @@ public class MemSeries {
             long minSeqNo = Long.MAX_VALUE;
             long minTimestamp = Long.MAX_VALUE;
             while (chunk != null) {
+                // Skip chunks that are already closed
+                if (chunk.isClosed()) {
+                    chunk = chunk.getPrev();
+                    continue;
+                }
+
                 if (chunk.getMaxTimestamp() <= cutoffTimestamp) {
                     closableChunks.addFirst(chunk);
                     // Record memchunk expiry due to inactivity (chunks past the cutoff timestamp)
                     TSDBMetrics.incrementCounter(TSDBMetrics.ENGINE.memChunksExpiredTotal, 1);
                 } else {
+                    // record minSeqNumber of non-closable chunks
                     minSeqNo = Math.min(minSeqNo, chunk.getMinSeqNo());
                     minTimestamp = Math.min(minTimestamp, chunk.getMinTimestamp());
                 }

@@ -15,6 +15,7 @@ import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.service.ClusterApplierService;
 import org.opensearch.common.lucene.Lucene;
 import org.opensearch.common.settings.IndexScopedSettings;
+import org.opensearch.common.lucene.index.OpenSearchDirectoryReader;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.common.xcontent.XContentType;
@@ -35,16 +36,25 @@ import org.opensearch.threadpool.FixedExecutorBuilder;
 import org.opensearch.threadpool.TestThreadPool;
 import org.opensearch.tsdb.MutableClock;
 import org.opensearch.tsdb.TSDBPlugin;
+import org.opensearch.tsdb.core.head.MemChunk;
 import org.opensearch.tsdb.core.head.MemSeries;
+import org.opensearch.tsdb.core.head.MemSeriesReader;
 import org.opensearch.tsdb.core.index.closed.ClosedChunkIndex;
+import org.opensearch.tsdb.core.index.live.MemChunkReader;
 import org.opensearch.tsdb.core.model.ByteLabels;
 import org.opensearch.tsdb.core.model.Labels;
 import org.junit.After;
 import org.junit.Before;
+import org.opensearch.tsdb.core.utils.Time;
 
 import java.io.IOException;
 import java.time.Clock;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.opensearch.index.seqno.SequenceNumbers.UNASSIGNED_SEQ_NO;
@@ -1217,5 +1227,160 @@ public class TSDBEngineTests extends EngineTestCase {
         // Verify data is still accessible
         metricsEngine.refresh("test");
         assertEquals("Should have 2 series", 2L, metricsEngine.getHead().getNumSeries());
+    }
+
+    public void testMMappedChunksLifeCycleWithMultipleRefreshes() throws Exception {
+        // 1. Initialize engine
+        // (already done in setUp)
+        assertTrue("Engine should be initialized", metricsEngine != null);
+
+        // Enable series dropping with post_recovery refresh to allow chunk closing
+        metricsEngine.refresh("post_recovery");
+
+        TimeUnit timeUnit = TimeUnit.valueOf(TSDBPlugin.TSDB_ENGINE_TIME_UNIT.get(indexSettings.getSettings()));
+        long oooCutoffWindow = Time.toTimestamp(TSDBPlugin.TSDB_ENGINE_OOO_CUTOFF.get(indexSettings.getSettings()), timeUnit);
+        long chunkRange = Time.toTimestamp(TSDBPlugin.TSDB_ENGINE_CHUNK_DURATION.get(indexSettings.getSettings()), timeUnit);
+        MemChunkReader chunkReader = metricsEngine.getHead().getChunkReader();
+        MemSeriesReader seriesReader = metricsEngine.getHead().getMemSeriesReader();
+
+        // Create test series for tracking throughout the test
+        Labels testSeries1 = ByteLabels.fromStrings("service", "api", "env", "prod");
+        Labels testSeries2 = ByteLabels.fromStrings("service", "db", "env", "prod");
+        Labels testSeries3 = ByteLabels.fromStrings("service", "cache", "env", "prod");
+
+        // 2. First round: Create some chunks and close them (set A)
+        // Index data that will be closed in first closeHeadChunks
+        // series1 -> chunk[1000L:100.0, 2000L:200.0]
+        // series2 -> chunk[1500L:150.0, 2500L:250.0]
+        publishSample(0, createSampleJson(testSeries1, 1000L, 100.0));
+        publishSample(1, createSampleJson(testSeries1, 2000L, 200.0));
+        publishSample(2, createSampleJson(testSeries2, 1500L, 150.0));
+        publishSample(3, createSampleJson(testSeries2, 2500L, 250.0));
+
+        // Force all chunks to become closeable by advancing max timestamp
+        metricsEngine.getHead().updateMaxSeenTimestamp(3000L + oooCutoffWindow + chunkRange);
+
+        // close the chunks in set A
+        metricsEngine.flush(true, true);
+
+        OpenSearchDirectoryReader readerV1 = metricsEngine.getReferenceManager(Engine.SearcherScope.INTERNAL).acquire();
+        long initialVersion = readerV1.getVersion();
+
+        // 3. Second round: Create more chunks and close them (set B)
+        // Index more data that will be closed in second closeHeadChunks
+        publishSample(4, createSampleJson(testSeries1, 4000L + chunkRange, 400.0));
+        publishSample(5, createSampleJson(testSeries3, 3500L + chunkRange, 350.0));
+        publishSample(6, createSampleJson(testSeries3, 4500L + chunkRange, 450.0));
+
+        // Advance timestamp to make these chunks closeable
+        metricsEngine.getHead().updateMaxSeenTimestamp(5000L + oooCutoffWindow + chunkRange * 2);
+
+        // close the chunks in set B
+        metricsEngine.flush(true, true);
+        OpenSearchDirectoryReader readerV2 = metricsEngine.getReferenceManager(Engine.SearcherScope.INTERNAL).acquire(); // A union B
+        assertEquals(initialVersion + 1, readerV2.getVersion());
+
+        // Verify the MMapped chunks manager has the reader version tracked
+        Map<Long, Set<MemChunk>> allChunksAfterV1Refresh = metricsEngine.getMMappedChunksManager().getAllMMappedChunks();
+
+        // Create expected chunk map using MemChunkReader from Head
+        Map<Long, Set<MemChunk>> expectedChunks = new HashMap<>();
+        expectedChunks.putIfAbsent(testSeries1.stableHash(), new HashSet<>());
+        expectedChunks.putIfAbsent(testSeries2.stableHash(), new HashSet<>());
+        expectedChunks.putIfAbsent(testSeries3.stableHash(), new HashSet<>());
+
+        // Get chunks for each series using MemChunkReader
+        final Set<MemChunk> series1ChunksAB = new HashSet<>(chunkReader.getChunks(testSeries1.stableHash()));
+        final Set<MemChunk> series2ChunksAB = new HashSet<>(chunkReader.getChunks(testSeries2.stableHash()));
+        final Set<MemChunk> series3ChunksAB = new HashSet<>(chunkReader.getChunks(testSeries3.stableHash()));
+        expectedChunks.get(testSeries1.stableHash()).addAll(series1ChunksAB);
+        expectedChunks.get(testSeries2.stableHash()).addAll(series2ChunksAB);
+        expectedChunks.get(testSeries3.stableHash()).addAll(series3ChunksAB);
+
+        // Compare expected vs actual chunks
+        assertEquals("should close all chunks currently in the index", expectedChunks, allChunksAfterV1Refresh);
+
+        // 4. Third round: Create more chunks (set C)
+        publishSample(7, createSampleJson(testSeries2, 6000L + chunkRange * 2, 600.0));
+        publishSample(8, createSampleJson(testSeries1, 6500L + chunkRange * 2, 650.0));
+
+        // Advance timestamp to make these chunks closeable
+        metricsEngine.getHead().updateMaxSeenTimestamp(7000L + oooCutoffWindow + chunkRange * 3);
+        // close all the chunks in set C
+        metricsEngine.flush(true, true);
+
+        OpenSearchDirectoryReader readerV3 = metricsEngine.getReferenceManager(Engine.SearcherScope.INTERNAL).acquire(); // A union B union
+                                                                                                                         // C
+
+        assertEquals(initialVersion + 2, readerV3.getVersion());
+        Map<Long, Set<MemChunk>> allChunksAfterV2Refresh = metricsEngine.getMMappedChunksManager().getAllMMappedChunks();
+
+        final Set<MemChunk> series1ChunksC = Set.of(seriesReader.getMemSeries(testSeries1.stableHash()).getHeadChunk());
+        final Set<MemChunk> series2ChunksC = Set.of(seriesReader.getMemSeries(testSeries2.stableHash()).getHeadChunk());
+        expectedChunks.get(testSeries1.stableHash()).addAll(series1ChunksC);
+        expectedChunks.get(testSeries2.stableHash()).addAll(series2ChunksC);
+
+        assertEquals(expectedChunks, allChunksAfterV2Refresh);// series1:3chunks series2:2chunk
+                                                              // series3:1chunk
+
+        // 5. Fourth round: Create more chunks (set D)
+        publishSample(9, createSampleJson(testSeries3, 8000L + chunkRange * 3, 800.0));
+        publishSample(10, createSampleJson(testSeries2, 8500L + chunkRange * 3, 850.0));
+
+        // Advance timestamp to make these chunks closeable
+        metricsEngine.getHead().updateMaxSeenTimestamp(9000L + oooCutoffWindow + chunkRange * 4);
+        metricsEngine.flush(true, true);
+        OpenSearchDirectoryReader readerV4 = metricsEngine.getReferenceManager(Engine.SearcherScope.INTERNAL).acquire(); // A union B union
+                                                                                                                         // C union D
+        assertEquals(initialVersion + 3, readerV4.getVersion());
+        Map<Long, Set<MemChunk>> allChunksAfterV4Refresh = metricsEngine.getMMappedChunksManager().getAllMMappedChunks();
+
+        final Set<MemChunk> series3ChunksD = Set.of(seriesReader.getMemSeries(testSeries3.stableHash()).getHeadChunk());
+        final Set<MemChunk> series2ChunksD = Set.of(seriesReader.getMemSeries(testSeries2.stableHash()).getHeadChunk());
+        expectedChunks.get(testSeries3.stableHash()).addAll(series3ChunksD);
+        expectedChunks.get(testSeries2.stableHash()).addAll(series2ChunksD);
+
+        assertEquals(expectedChunks, allChunksAfterV4Refresh);// series1:3chunks series2:3chunk
+        // series3:1chunk
+
+        // 6. Simulate v1+v2 readers finishing - no more references to those chunks
+        metricsEngine.getReferenceManager(Engine.SearcherScope.INTERNAL).release(readerV1); // A dropped
+        metricsEngine.getReferenceManager(Engine.SearcherScope.INTERNAL).release(readerV2); // B dropped
+
+        // This refresh should track the new reader version with current chunks
+        metricsEngine.refresh("test_v5_refresh");
+        OpenSearchDirectoryReader readerV5 = metricsEngine.getReferenceManager(Engine.SearcherScope.INTERNAL).acquire(); // C union D
+        assertEquals(initialVersion + 4, readerV5.getVersion());
+        Map<Long, Set<MemChunk>> allChunksAfterV5Refresh = metricsEngine.getMMappedChunksManager().getAllMMappedChunks(); // C union D
+
+        // After releasing readers V1 and V2, chunks from sets A and B should be dropped
+        // Create new expected map with only chunks C and D
+        Map<Long, Set<MemChunk>> expectedChunksCD = new HashMap<>();
+        expectedChunksCD.putIfAbsent(testSeries1.stableHash(), new HashSet<>());
+        expectedChunksCD.putIfAbsent(testSeries2.stableHash(), new HashSet<>());
+        expectedChunksCD.putIfAbsent(testSeries3.stableHash(), new HashSet<>());
+
+        // Add only chunks from sets C and D
+        expectedChunksCD.get(testSeries1.stableHash()).addAll(series1ChunksC);
+        expectedChunksCD.get(testSeries2.stableHash()).addAll(series2ChunksC);
+        expectedChunksCD.get(testSeries2.stableHash()).addAll(series2ChunksD);
+        expectedChunksCD.get(testSeries3.stableHash()).addAll(series3ChunksD);
+
+        assertEquals(expectedChunksCD, allChunksAfterV5Refresh);
+
+        metricsEngine.getReferenceManager(Engine.SearcherScope.INTERNAL).release(readerV3); // C dropped
+        metricsEngine.getReferenceManager(Engine.SearcherScope.INTERNAL).release(readerV4); // D dropped
+
+        Map<Long, Set<MemChunk>> allChunksAfterClosingReaders = metricsEngine.getMMappedChunksManager().getAllMMappedChunks(); // empty
+        assertTrue("Should have no chunks after readers that hold on to chunks are released", allChunksAfterClosingReaders.isEmpty());
+
+        // now release the last reader
+        metricsEngine.getReferenceManager(Engine.SearcherScope.INTERNAL).release(readerV5);
+        Map<Long, Set<MemChunk>> allChunksAfterClosingAllReaders = metricsEngine.getMMappedChunksManager().getAllMMappedChunks(); // empty
+        assertTrue("Should have no chunks after all readers released", allChunksAfterClosingAllReaders.isEmpty());
+
+        // note : the last reader will have a refCount of 2 until new reader is created during refresh(). so we cannot trigger doClose()
+        // call which will trigger dropping of closed series here.
+
     }
 }

@@ -32,6 +32,7 @@ public class MemChunk {
     private long maxTimestamp; // maximum timestamp boundary of this chunk, exclusive
     private MemChunk prev; // link to the previous chunk on the linked list
     private MemChunk next; // link to the next chunk on the linked list
+    private volatile boolean isClosed; // indicates whether this chunk has been closed
 
     /**
      * Constructs a new MemChunk instance.
@@ -49,6 +50,7 @@ public class MemChunk {
             prev.next = this;
         }
         this.chunk = new CompoundChunk(encoding);
+        this.isClosed = false;
     }
 
     /**
@@ -177,6 +179,21 @@ public class MemChunk {
      */
     public long getMinSeqNo() {
         return minSeqNo;
+    }
+
+    /**
+     * Returns whether this chunk has been closed.
+     * @return true if the chunk is closed, false otherwise
+     */
+    public boolean isClosed() {
+        return isClosed;
+    }
+
+    /**
+     * Marks this chunk as closed.
+     */
+    public void setClosed(boolean closed) {
+        this.isClosed = closed;
     }
 
     private static class ChunkEntry {

@@ -383,6 +383,66 @@ public class MemSeriesTests extends OpenSearchTestCase {
         return series;
     }
 
+    public void testGetClosableChunksSkipsClosedChunks() {
+        Labels labels = ByteLabels.fromStrings("k1", "v1", "k2", "v2");
+        MemSeries series = new MemSeries(123L, labels);
+        ChunkOptions options = new ChunkOptions(8000, 8);
+
+        // Create 4 chunks: [0-8000], [8000-16000], [16000-24000], [24000-32000]
+        for (int i = 0; i < 32; i++) {
+            series.append(i, i * 1000L, i * 10.0, options);
+        }
+
+        MemChunk firstChunk = series.getHeadChunk().oldest();
+        MemChunk secondChunk = firstChunk.getNext();
+        MemChunk thirdChunk = secondChunk.getNext();
+        MemChunk fourthChunk = thirdChunk.getNext();
+
+        // Test 1: Initially, all chunks should be eligible for closing
+        var result = series.getClosableChunks(32000L);
+        assertEquals(List.of(firstChunk, secondChunk, thirdChunk, fourthChunk), result.closableChunks());
+
+        // Test 2: Mark the first chunk as closed
+        firstChunk.setClosed(true);
+        result = series.getClosableChunks(32000L);
+        assertEquals(List.of(secondChunk, thirdChunk, fourthChunk), result.closableChunks());
+
+        // Test 3: Mark the second chunk as closed too
+        secondChunk.setClosed(true);
+        result = series.getClosableChunks(32000L);
+        assertEquals(List.of(thirdChunk, fourthChunk), result.closableChunks());
+
+        // Test 4: Closed and cutoff filtering - Close second chunk, cutoff at 24000L
+        // Reset state for this test
+        series = new MemSeries(123L, labels);
+        for (int i = 0; i < 32; i++) {
+            series.append(i, i * 1000L, i * 10.0, options);
+        }
+        firstChunk = series.getHeadChunk().oldest();
+        secondChunk = firstChunk.getNext();
+        thirdChunk = secondChunk.getNext();
+        fourthChunk = thirdChunk.getNext();
+
+        secondChunk.setClosed(true);
+        result = series.getClosableChunks(24000L);
+        assertEquals(List.of(firstChunk, thirdChunk), result.closableChunks());
+        assertEquals(24, result.minSeqNo());
+        assertEquals(24000L, result.minTimestamp());
+
+        // Test 5: All chunks closed or beyond cutoff
+        firstChunk.setClosed(true);
+        thirdChunk.setClosed(true);
+        result = series.getClosableChunks(16000L);
+        assertEquals(0, result.closableChunks().size());
+        assertEquals(24, result.minSeqNo());
+        assertEquals(24000L, result.minTimestamp());
+
+        // Test 6: All chunks closed
+        fourthChunk.setClosed(true);
+        result = series.getClosableChunks(32000L);
+        assertEquals(0, result.closableChunks().size());
+    }
+
     // Iterator containing results, merged and dedup'd
     private ChunkIterator getMergedDedupedIterator(List<ChunkIterator> iterators) {
         return new DedupIterator(new MergeIterator(iterators), DedupIterator.DuplicatePolicy.FIRST);

@@ -85,6 +85,17 @@ public class HeadTests extends OpenSearchTestCase {
         threadPool.shutdownNow();
     }
 
+    /**
+     * transform the minSeqNo to minSeqNo to keep after closing chunks
+     * */
+    public static long getMinSeqNoToKeep(long minSeqNo) {
+        // translog replays starts from LOCAL_CHECKPOINT_KEY + 1, since it expects the local checkpoint to be the last processed seq no
+        // the minSeqNo computed here is the minimum sequence number of all in-memory samples, therefore we must replay it (subtract one).
+        // If the minSeqNo is Long.MAX_VALUE indicating all chunks are closed, return Long.MAX_VALUE.
+        return minSeqNo == Long.MAX_VALUE ? Long.MAX_VALUE : minSeqNo - 1;
+
+    }
+
     public void testHeadLifecycle() throws IOException, InterruptedException {
         ClosedChunkIndexManager closedChunkIndexManager = new ClosedChunkIndexManager(
             createTempDir("metrics"),
@@ -138,15 +149,20 @@ public class HeadTests extends OpenSearchTestCase {
         assertFalse(readerManagers.isEmpty());
 
         List<Object> seriesChunks = getChunks(head, closedChunkIndexManager);
-        assertEquals(3, seriesChunks.size());
+        assertEquals(4, seriesChunks.size());
 
         assertTrue("First chunk is closed", seriesChunks.get(0) instanceof ClosedChunk);
+
+        // chunks will not be dropped until TSDBDirectoryReader is closed - so all 4 should be present
+        // second chunk should have the same content as the first chunk
         assertTrue("Second chunk is still in-memory", seriesChunks.get(1) instanceof MemChunk);
         assertTrue("Third chunk is still in-memory", seriesChunks.get(2) instanceof MemChunk);
+        assertTrue("Fourth chunk is still in-memory", seriesChunks.get(3) instanceof MemChunk);
 
         ChunkIterator firstChunk = ((ClosedChunk) seriesChunks.get(0)).getChunkIterator();
-        ChunkIterator secondChunk = ((MemChunk) seriesChunks.get(1)).getCompoundChunk().toChunk().iterator();
+        ChunkIterator secondChunk = ((MemChunk) seriesChunks.get(1)).getCompoundChunk().toChunk().iterator(); // the already mmapped chunks
         ChunkIterator thirdChunk = ((MemChunk) seriesChunks.get(2)).getCompoundChunk().toChunk().iterator();
+        ChunkIterator forthChunk = ((MemChunk) seriesChunks.get(3)).getCompoundChunk().toChunk().iterator();
 
         TestUtils.assertIteratorEquals(
             firstChunk,
@@ -156,11 +172,17 @@ public class HeadTests extends OpenSearchTestCase {
 
         TestUtils.assertIteratorEquals(
             secondChunk,
+            List.of(1000L, 2000L, 3000L, 4000L, 5000L, 6000L, 7000L),
+            List.of(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0)
+        );
+
+        TestUtils.assertIteratorEquals(
+            thirdChunk,
             List.of(8000L, 9000L, 10000L, 11000L, 12000L, 13000L, 14000L, 15000L),
             List.of(8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0)
         );
 
-        TestUtils.assertIteratorEquals(thirdChunk, List.of(16000L, 17000L), List.of(16.0, 17.0));
+        TestUtils.assertIteratorEquals(forthChunk, List.of(16000L, 17000L), List.of(16.0, 17.0));
 
         head.close();
         closedChunkIndexManager.close();
@@ -213,7 +235,8 @@ public class HeadTests extends OpenSearchTestCase {
 
         // Simulate advancing the time, so the series with data may have it's last chunk closed
         head.updateMaxSeenTimestamp(40000L); // last chunk has range 16000-24000, this should ensure maxTime - oooCutoff is beyond that
-        assertEquals(Long.MAX_VALUE, head.closeHeadChunks(true));
+        long minSeqNo = head.closeHeadChunks(true).minSeqNo();
+        assertEquals(Long.MAX_VALUE, getMinSeqNoToKeep(minSeqNo));
 
         head.close();
         closedChunkIndexManager.close();
@@ -245,8 +268,9 @@ public class HeadTests extends OpenSearchTestCase {
             appender1.append(() -> {}, () -> {});
         }
 
-        long minSeqNo = head.closeHeadChunks(true);
-        assertEquals("7 samples were MMAPed, replay from minSeqNo + 1", 6, minSeqNo);
+        Head.IndexChunksResult indexChunksResult = head.closeHeadChunks(true);
+
+        assertEquals("7 samples were MMAPed, replay from minSeqNo + 1", 6, getMinSeqNoToKeep(indexChunksResult.minSeqNo()));
         head.close();
         closedChunkIndexManager.close();
 
@@ -337,8 +361,8 @@ public class HeadTests extends OpenSearchTestCase {
 
         // closeHeadChunks should return minSeqNo of the first failed chunk minus 1
         // First failed chunk is at index 2: [16000-24000] with minSeqNo 115
-        long minSeqNo = head.closeHeadChunks(true);
-        assertEquals(114, minSeqNo); // 115 - 1
+        Head.IndexChunksResult indexChunksResult = head.closeHeadChunks(true);
+        assertEquals(114, getMinSeqNoToKeep(indexChunksResult.minSeqNo())); // 115 - 1
 
         head.close();
         closedChunkIndexManager.close();
@@ -381,8 +405,8 @@ public class HeadTests extends OpenSearchTestCase {
         doReturn(false).when(closedChunkIndexManager).addMemChunk(series, result.closableChunks().getFirst());
 
         // closeHeadChunks should handle the failure gracefully and return the first failed chunk's minSeqNo - 1
-        long minSeqNo = head.closeHeadChunks(true);
-        assertEquals(99, minSeqNo); // 100 - 1
+        Head.IndexChunksResult indexChunksResult = head.closeHeadChunks(true);
+        assertEquals(99, getMinSeqNoToKeep(indexChunksResult.minSeqNo())); // 100 - 1
 
         head.close();
         closedChunkIndexManager.close();

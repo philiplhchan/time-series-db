@@ -28,6 +28,7 @@ import org.apache.lucene.search.KnnCollector;
 import org.apache.lucene.util.Bits;
 import org.opensearch.tsdb.core.chunk.ChunkIterator;
 import org.opensearch.tsdb.core.mapping.LabelStorageType;
+import org.opensearch.tsdb.core.head.MemChunk;
 import org.opensearch.tsdb.core.mapping.Constants;
 import org.opensearch.tsdb.core.model.Labels;
 import org.opensearch.tsdb.core.reader.LabelsStorage;
@@ -35,7 +36,11 @@ import org.opensearch.tsdb.core.reader.TSDBDocValues;
 import org.opensearch.tsdb.core.reader.TSDBLeafReader;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Lucene leaf reader for live time series index data.
@@ -48,7 +53,7 @@ public class LiveSeriesIndexLeafReader extends TSDBLeafReader {
     private final LeafReader inner;
     private final MemChunkReader memChunkReader;
     private final LabelStorageType labelStorageType;
-    // TODO : Add map Map<MemSeries, Set<MemChunk>> mappedChunks to reduce already mmaped chunks from results.
+    private final Map<Long, Set<MemChunk>> mMappedChunks;
 
     /**
      * Constructs a LiveSeriesIndexLeafReader that provides access to live time series data, with pruning based on minTimestamp
@@ -63,13 +68,14 @@ public class LiveSeriesIndexLeafReader extends TSDBLeafReader {
         LeafReader inner,
         MemChunkReader memChunkReader,
         LabelStorageType labelStorageType,
-        long minTimestamp
+        long minTimestamp,
+        Map<Long, Set<MemChunk>> mMappedChunks
     ) {
         super(inner, minTimestamp, Long.MAX_VALUE);
         this.inner = inner;
         this.memChunkReader = memChunkReader;
         this.labelStorageType = labelStorageType;
-        // TODO : Delete already mmapped chunks
+        this.mMappedChunks = mMappedChunks;
     }
 
     /**
@@ -80,12 +86,17 @@ public class LiveSeriesIndexLeafReader extends TSDBLeafReader {
      * @param memChunkReader read memchunks given a reference
      * @param labelStorageType the storage type configured for labels
      */
-    public LiveSeriesIndexLeafReader(LeafReader inner, MemChunkReader memChunkReader, LabelStorageType labelStorageType) {
+    public LiveSeriesIndexLeafReader(
+        LeafReader inner,
+        MemChunkReader memChunkReader,
+        Map<Long, Set<MemChunk>> mMappedChunks,
+        LabelStorageType labelStorageType
+    ) {
         super(inner);
         this.inner = inner;
         this.memChunkReader = memChunkReader;
         this.labelStorageType = labelStorageType;
-        // TODO : Delete already mmaped chunks
+        this.mMappedChunks = mMappedChunks;
     }
 
     @Override
@@ -106,16 +117,22 @@ public class LiveSeriesIndexLeafReader extends TSDBLeafReader {
 
     @Override
     public List<ChunkIterator> chunksForDoc(int docId, TSDBDocValues tsdbDocValues) throws IOException {
-        // TODO : Exclude already mapped chunks from results
-        NumericDocValues chunkRefValues = tsdbDocValues.getChunkRefDocValues();
-        if (!chunkRefValues.advanceExact(docId)) {
+        NumericDocValues seriesRefValue = tsdbDocValues.getChunkRefDocValues();
+        if (!seriesRefValue.advanceExact(docId)) {
             return List.of();
         }
 
-        // Get chunk reference from numeric doc values
-        long chunkRef = chunkRefValues.longValue();
-        // TODO : exclude already mapped chunks from results using mappedChunks
-        return memChunkReader.getChunkIterators(chunkRef);
+        long seriesRef = seriesRefValue.longValue(); // reference to the series
+        Set<MemChunk> chunksToFilter = mMappedChunks.getOrDefault(seriesRef, Collections.emptySet());
+        List<MemChunk> memChunks = memChunkReader.getChunks(seriesRef); // get all memchunks for the series
+        List<ChunkIterator> chunkIterators = new ArrayList<>();
+        for (MemChunk memChunk : memChunks) {
+            if (!chunksToFilter.contains(memChunk)) {
+                chunkIterators.addAll(memChunk.getCompoundChunk().getChunkIterators());
+            }
+        }
+
+        return chunkIterators;
     }
 
     @Override

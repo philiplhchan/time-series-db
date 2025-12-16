@@ -7,7 +7,7 @@
  */
 package org.opensearch.tsdb.core.index.live;
 
-import org.opensearch.tsdb.core.chunk.ChunkIterator;
+import org.opensearch.tsdb.core.head.MemChunk;
 
 import java.util.List;
 
@@ -20,7 +20,7 @@ public interface MemChunkReader {
      * Gets chunks associated with the given reference.
      *
      * @param reference the reference to lookup chunks for
-     * @return list of chunk iterators for the reference
+     * @return list of chunks for the reference
      */
-    List<ChunkIterator> getChunkIterators(long reference);
+    List<MemChunk> getChunks(long reference);
 }

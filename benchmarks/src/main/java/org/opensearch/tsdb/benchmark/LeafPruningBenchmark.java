@@ -45,6 +45,7 @@ import org.opensearch.tsdb.core.head.MemChunk;
 import org.opensearch.tsdb.core.index.closed.ClosedChunkIndex;
 import org.opensearch.index.query.QueryBuilder;
 import org.opensearch.tsdb.core.mapping.Constants;
+import org.opensearch.tsdb.core.mapping.LabelStorageType;
 import org.opensearch.tsdb.core.model.ByteLabels;
 import org.opensearch.tsdb.core.model.Labels;
 import org.opensearch.tsdb.core.reader.DirectoryReaderWithMetadata;
@@ -171,7 +172,12 @@ public class LeafPruningBenchmark extends BaseTSDBBenchmark {
             liveReader,
             () -> BASE_START_TIME + ((numClosedChunkIndexes - 1) * TIME_RANGE_PER_INDEX), // live reader bounded to the most recent chunk
             closedReaders,
-            null
+            null,
+            new HashMap<>(),
+            null,
+            LabelStorageType.BINARY,
+            0L
+
         );
         indexSearcher = new IndexSearcher(tsdbReader);
 
