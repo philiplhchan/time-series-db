@@ -124,12 +124,12 @@ public class TSDBRecoveryTests extends OpenSearchIndexLevelReplicationTestCase {
 
             // Verify sample counts match between primary and replica
             TSDBEngine primaryEngine = (TSDBEngine) getEngine(shards.getPrimary());
-            long primarySampleCount = TSDBTestUtils.countSamples(primaryEngine, primaryEngine.getHead());
+            long primarySampleCount = TSDBTestUtils.countSamples(primaryEngine);
             assertEquals("Primary should have all samples", totalDocs, primarySampleCount);
 
             for (IndexShard replicaShard : shards.getReplicas()) {
                 TSDBEngine replicaEngine = (TSDBEngine) getEngine(replicaShard);
-                long replicaSampleCount = TSDBTestUtils.countSamples(replicaEngine, replicaEngine.getHead());
+                long replicaSampleCount = TSDBTestUtils.countSamples(replicaEngine);
                 assertEquals("Replica should have same sample count as primary", primarySampleCount, replicaSampleCount);
             }
 
@@ -223,10 +223,10 @@ public class TSDBRecoveryTests extends OpenSearchIndexLevelReplicationTestCase {
 
             // Verify replica has all samples
             shards.refresh("test");
-            long primarySampleCount = TSDBTestUtils.countSamples(primaryEngine, primaryEngine.getHead());
+            long primarySampleCount = TSDBTestUtils.countSamples(primaryEngine);
             for (IndexShard replicaShard : shards.getReplicas()) {
                 TSDBEngine replicaEngine = (TSDBEngine) getEngine(replicaShard);
-                long replicaSampleCount = TSDBTestUtils.countSamples(replicaEngine, replicaEngine.getHead());
+                long replicaSampleCount = TSDBTestUtils.countSamples(replicaEngine);
                 assertEquals("Replica should have same sample count as primary", primarySampleCount, replicaSampleCount);
             }
         } finally {

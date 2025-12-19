@@ -1071,7 +1071,7 @@ public class TSDBEngineTests extends EngineTestCase {
         );
 
         // Verify all samples are queryable from both head and closed chunks
-        long totalSamples = countSamples(metricsEngine, metricsEngine.getHead());
+        long totalSamples = countSamples(metricsEngine);
         assertEquals("All samples should be queryable", numIndexingThreads * samplesPerThread, totalSamples);
     }
 

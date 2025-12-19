@@ -7,11 +7,9 @@
  */
 package org.opensearch.tsdb.utils;
 
-import org.apache.lucene.index.BinaryDocValues;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.LeafReader;
 import org.apache.lucene.index.LeafReaderContext;
-import org.apache.lucene.util.BytesRef;
 import org.opensearch.action.search.SearchResponse;
 import org.opensearch.transport.client.Client;
 import org.opensearch.common.xcontent.XContentFactory;
@@ -20,10 +18,8 @@ import org.opensearch.index.engine.Engine;
 import org.opensearch.index.engine.TSDBEngine;
 import org.opensearch.search.aggregations.AggregationBuilder;
 import org.opensearch.tsdb.core.chunk.ChunkIterator;
-import org.opensearch.tsdb.core.head.Head;
-import org.opensearch.tsdb.core.head.MemChunk;
-import org.opensearch.tsdb.core.head.MemSeries;
-import org.opensearch.tsdb.core.index.closed.ClosedChunkIndexIO;
+import org.opensearch.tsdb.core.reader.TSDBDocValues;
+import org.opensearch.tsdb.core.reader.TSDBLeafReader;
 import org.opensearch.tsdb.core.mapping.Constants;
 import org.opensearch.tsdb.core.model.Labels;
 import org.opensearch.tsdb.framework.models.TimeSeriesSample;
@@ -114,51 +110,36 @@ public final class TSDBTestUtils {
     }
 
     /**
-     * Count all samples in a TSDBEngine from both head (in-memory) and closed (on-disk) chunks.
+     * Count all samples in a TSDBEngine from both live (in-memory) and closed (on-disk) chunks.
+     * Uses TSDBEngine#getReferenceManager which returns a reader aggregating both live and closed leaves,
+     * and TSDBLeafReader#chunksForDoc to uniformly access chunks from both types of leaves.
      *
      * @param engine The TSDBEngine to count samples from
      * @return Total number of samples across all chunks
      */
-    public static long countSamples(TSDBEngine engine, Head head) throws Exception {
+    public static long countSamples(TSDBEngine engine) throws Exception {
         long totalSamples = 0;
 
-        // 1. Count samples in head chunks (in-memory, not yet mmapped)
-        for (MemSeries series : head.getSeriesMap().getSeriesMap()) {
-            MemChunk chunk = series.getHeadChunk();
-            while (chunk != null) {
-                ChunkIterator iterator = chunk.getCompoundChunk().toChunk().iterator();
-                while (iterator.next() != org.opensearch.tsdb.core.chunk.ChunkIterator.ValueType.NONE) {
-                    totalSamples++;
-                }
-                chunk = chunk.getPrev();
-            }
-        }
-
-        // 2. Count samples in closed chunks (mmapped to disk, compressed in Lucene docs)
-        // Each Lucene document contains a compressed chunk with many samples
+        // Uses getReferenceManager to get a reader that includes both live and closed leaves
         try (Engine.Searcher searcher = engine.acquireSearcher("count_samples")) {
             IndexReader reader = searcher.getDirectoryReader();
 
-            // Iterate through all documents in closed chunk indexes
             for (LeafReaderContext context : reader.leaves()) {
                 LeafReader leafReader = context.reader();
 
-                // Get the chunks field which contains compressed sample data
-                BinaryDocValues chunksField = leafReader.getBinaryDocValues(Constants.IndexSchema.CHUNK);
-
-                if (chunksField == null) {
-                    continue; // No chunks in this segment
+                TSDBLeafReader tsdbLeafReader = TSDBLeafReader.unwrapLeafReader(leafReader);
+                if (tsdbLeafReader == null) {
+                    continue;
                 }
 
-                // Iterate through all docs in this segment
+                TSDBDocValues tsdbDocValues = tsdbLeafReader.getTSDBDocValues();
+
+                // Iterate through all docs in this leaf
                 for (int doc = 0; doc < leafReader.maxDoc(); doc++) {
-                    if (chunksField.advanceExact(doc)) {
-                        // Decompress the chunk and count samples
-                        BytesRef chunkBytes = chunksField.binaryValue();
+                    List<ChunkIterator> chunks = tsdbLeafReader.chunksForDoc(doc, tsdbDocValues);
 
-                        // Decode the chunk to get individual samples
-                        ChunkIterator chunkIterator = ClosedChunkIndexIO.getClosedChunkFromSerialized(chunkBytes).getChunkIterator();
-
+                    // Count samples in each chunk
+                    for (ChunkIterator chunkIterator : chunks) {
                         while (chunkIterator.next() != ChunkIterator.ValueType.NONE) {
                             totalSamples++;
                         }
