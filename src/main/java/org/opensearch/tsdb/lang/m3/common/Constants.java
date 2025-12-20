@@ -37,6 +37,11 @@ public class Constants {
          * Known M3QL functions that are not yet implemented.
          */
         public static final Set<String> KNOWN_UNIMPLEMENTED_FUNCTIONS = Set.of(
+            "_mutateTags",
+            "_summarizeBy",
+            "_tagAdd",
+            "_toHistogramBuckets",
+            "_topKPerTimestamp",
             "aliasSub",
             "aliasByDistinctTags",
             "aliasByBucket",
@@ -44,10 +49,12 @@ public class Constants {
             "anomalies",
             "asBurnRate",
             "asMultiBurnRate",
+            "burnRate",
             "burnRateMultiplier",
             "changed",
             "constantLine",
             "derivative",
+            "divideScalar",
             "divideWhen",
             "execute",
             "exec",
@@ -61,11 +68,13 @@ public class Constants {
             "mockFetchLine",
             "mockFetchLinear",
             "mockFetchPeriodic",
+            "multiBurnRate",
             "nonNegativeDerivative",
             "nPercentile",
             "offset",
             "promHistogramPercentile",
             "range",
+            "rangeOfSeries",
             "removeAbovePercentile",
             "removeBelowPercentile",
             "round",
@@ -76,13 +85,16 @@ public class Constants {
             "squareRoot",
             "sustainedAbove",
             "sustainedBelow",
+            "switch",
             "tagCompare",
             "tagSub",
             "tail",
             "topK",
             "timestamp",
             "toHistogram",
-            "toHistogramLinearBuckets"
+            "toHistogramLinearBuckets",
+            "union",
+            "where"
         );
 
         /**
