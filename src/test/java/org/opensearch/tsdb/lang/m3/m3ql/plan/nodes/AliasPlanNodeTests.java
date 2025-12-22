@@ -72,11 +72,12 @@ public class AliasPlanNodeTests extends BasePlanNodeTests {
         assertEquals("disk.usage", node.getAlias());
     }
 
-    public void testAliasPlanNodeFactoryMethodThrowsOnNoArguments() {
+    public void testAliasPlanNodeFactoryMethodWithNoArgument() {
         FunctionNode functionNode = new FunctionNode();
         functionNode.setFunctionName("alias");
 
-        expectThrows(IllegalArgumentException.class, () -> AliasPlanNode.of(functionNode));
+        AliasPlanNode node = AliasPlanNode.of(functionNode);
+        assertEquals("", node.getAlias());
     }
 
     public void testAliasPlanNodeFactoryMethodThrowsOnMultipleArguments() {

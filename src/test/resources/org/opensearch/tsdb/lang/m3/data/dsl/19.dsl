@@ -54,6 +54,21 @@
           }
         ]
       }
+    },
+    "0_coordinator" : {
+      "coordinator_pipeline" : {
+        "buckets_path" : [ ],
+        "stages" : [
+          {
+            "type" : "alias",
+            "pattern" : ""
+          }
+        ],
+        "references" : {
+          "0_unfold" : "0_unfold"
+        },
+        "inputReference" : "0_unfold"
+      }
     }
   }
 }

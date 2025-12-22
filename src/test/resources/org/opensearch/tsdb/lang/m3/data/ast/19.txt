@@ -5,3 +5,4 @@ ROOT
         TAG_VALUE(a)
     FUNCTION(median)
       VALUE(city)
+    FUNCTION(alias)

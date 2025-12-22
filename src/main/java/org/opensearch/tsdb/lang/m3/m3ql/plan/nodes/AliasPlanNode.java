@@ -63,8 +63,11 @@ public class AliasPlanNode extends M3PlanNode {
      */
     public static AliasPlanNode of(FunctionNode functionNode) {
         List<M3ASTNode> childNodes = functionNode.getChildren();
-        if (childNodes.size() != 1) {
-            throw new IllegalArgumentException("Alias function expects exactly one argument");
+        if (childNodes.size() > 1) {
+            throw new IllegalArgumentException("Alias function expects no more than one argument");
+        } else if (childNodes.isEmpty()) {
+            // allow no argument, treat as empty string
+            return new AliasPlanNode(M3PlannerContext.generateId(), "");
         }
 
         M3ASTNode child = childNodes.getFirst();
