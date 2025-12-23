@@ -92,7 +92,7 @@ public final class TimeSeriesNormalizer {
          */
         AVG {
             @Override
-            public ConsolidationFunction getFunction() {
+            public ConsolidationFunction getFunction(TimeSeries series) {
                 return ConsolidationFunction.AVG;
             }
         },
@@ -102,7 +102,7 @@ public final class TimeSeriesNormalizer {
          */
         SUM {
             @Override
-            public ConsolidationFunction getFunction() {
+            public ConsolidationFunction getFunction(TimeSeries series) {
                 return ConsolidationFunction.SUM;
             }
         },
@@ -112,7 +112,7 @@ public final class TimeSeriesNormalizer {
          */
         MAX {
             @Override
-            public ConsolidationFunction getFunction() {
+            public ConsolidationFunction getFunction(TimeSeries series) {
                 return ConsolidationFunction.MAX;
             }
         },
@@ -122,7 +122,7 @@ public final class TimeSeriesNormalizer {
          */
         MIN {
             @Override
-            public ConsolidationFunction getFunction() {
+            public ConsolidationFunction getFunction(TimeSeries series) {
                 return ConsolidationFunction.MIN;
             }
         },
@@ -132,7 +132,7 @@ public final class TimeSeriesNormalizer {
          */
         LAST {
             @Override
-            public ConsolidationFunction getFunction() {
+            public ConsolidationFunction getFunction(TimeSeries series) {
                 return ConsolidationFunction.LAST;
             }
         },
@@ -143,9 +143,25 @@ public final class TimeSeriesNormalizer {
          * This is useful when mixing counter and gauge metrics in the same normalization operation.
          */
         TYPE_AWARE {
+            /**
+             * <ul>
+             *   <li>If the series has a "type" label with value "counter" or "counts" (case-insensitive), uses SUM</li>
+             *   <li>Otherwise uses AVG</li>
+             * </ul>
+             *
+             * @param series The time series to check
+             * @return SUM if series is counter/counts type, otherwise the function from the strategy
+             */
             @Override
-            public ConsolidationFunction getFunction() {
-                // Default function for non-counter types when using TYPE_AWARE
+            public ConsolidationFunction getFunction(TimeSeries series) {
+                if (series.getLabels() != null && series.getLabels().has("type")) {
+                    String typeValue = series.getLabels().get("type");
+                    // Check for both "counter" and "counts" (case-insensitive)
+                    if ("counter".equalsIgnoreCase(typeValue) || "counts".equalsIgnoreCase(typeValue)) {
+                        return ConsolidationFunction.SUM;
+                    }
+                }
+                // For TYPE_AWARE, use AVG for non-counter types
                 return ConsolidationFunction.AVG;
             }
         };
@@ -156,16 +172,7 @@ public final class TimeSeriesNormalizer {
          *
          * @return The consolidation function
          */
-        public abstract ConsolidationFunction getFunction();
-
-        /**
-         * Check if this strategy is type-aware.
-         *
-         * @return true if TYPE_AWARE, false otherwise
-         */
-        public boolean isTypeAware() {
-            return this == TYPE_AWARE;
-        }
+        public abstract ConsolidationFunction getFunction(TimeSeries series);
     }
 
     private TimeSeriesNormalizer() {
@@ -237,18 +244,21 @@ public final class TimeSeriesNormalizer {
             return seriesList;
         }
 
-        // Calculate LCM and MAX of all step sizes, and find time range union
-        long lcmStep = seriesList.get(0).getStep();
-        long maxStep = seriesList.get(0).getStep();
+        // Calculate LCM/MAX of all step sizes, and find time range union
+        long commonStep = seriesList.get(0).getStep();
         long minStart = seriesList.get(0).getMinTimestamp();
         long maxEnd = seriesList.get(0).getMaxTimestamp();
 
         for (int i = 1; i < seriesList.size(); i++) {
             TimeSeries series = seriesList.get(i);
             long step = series.getStep();
-            lcmStep = lcm(lcmStep, step);
-            if (step > maxStep) {
-                maxStep = step;
+            // Select common step size based on strategy
+            if (StepSizeStrategy.MAX == stepSizeStrategy) {
+                if (step > commonStep) {
+                    commonStep = step;
+                }
+            } else {
+                commonStep = lcm(commonStep, step);
             }
 
             if (series.getMinTimestamp() < minStart) {
@@ -258,9 +268,6 @@ public final class TimeSeriesNormalizer {
                 maxEnd = series.getMaxTimestamp();
             }
         }
-
-        // Select common step size based on strategy
-        long commonStep = (stepSizeStrategy == StepSizeStrategy.MAX) ? maxStep : lcmStep;
 
         // Adjust end time to be divisible by common step
         long range = maxEnd - minStart;
@@ -279,7 +286,7 @@ public final class TimeSeriesNormalizer {
             }
 
             // Determine consolidation function based on strategy
-            ConsolidationFunction seriesConsolidationFunc = getConsolidationFunctionForSeries(series, consolidationStrategy);
+            ConsolidationFunction seriesConsolidationFunc = consolidationStrategy.getFunction(series);
 
             // Resample to normalized time buckets
             TimeSeries resampled = resampleSeries(series, minStart, maxEnd, commonStep, seriesConsolidationFunc);
@@ -429,39 +436,4 @@ public final class TimeSeriesNormalizer {
         }
         return a;
     }
-
-    /**
-     * Determines the appropriate consolidation function for a time series based on the consolidation strategy.
-     *
-     * <p>With TYPE_AWARE strategy:
-     * <ul>
-     *   <li>If the series has a "type" label with value "counter" or "counts" (case-insensitive), uses SUM</li>
-     *   <li>Otherwise uses AVG</li>
-     * </ul>
-     *
-     * <p>With other strategies (AVG, SUM, MAX, MIN, LAST):
-     * <ul>
-     *   <li>Always uses the specified consolidation function regardless of series type</li>
-     * </ul>
-     *
-     * @param series The time series to check
-     * @param strategy The consolidation strategy
-     * @return SUM if TYPE_AWARE and series is counter/counts type, otherwise the function from the strategy
-     */
-    private static ConsolidationFunction getConsolidationFunctionForSeries(TimeSeries series, ConsolidationStrategy strategy) {
-        if (strategy.isTypeAware()) {
-            if (series.getLabels() != null && series.getLabels().has("type")) {
-                String typeValue = series.getLabels().get("type");
-                // Check for both "counter" and "counts" (case-insensitive)
-                if ("counter".equalsIgnoreCase(typeValue) || "counts".equalsIgnoreCase(typeValue)) {
-                    return ConsolidationFunction.SUM;
-                }
-            }
-            // For TYPE_AWARE, use AVG for non-counter types
-            return ConsolidationFunction.AVG;
-        }
-        // For fixed strategies, use the function from the strategy
-        return strategy.getFunction();
-    }
-
 }

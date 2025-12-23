@@ -102,16 +102,13 @@ public abstract class AbstractGroupingStage implements UnaryPipelineStage {
         } else {
             // Label grouping: group by specified labels and aggregate within each group
             result = processWithLabelGrouping(input, isCoord);
-        }
-
-        // Apply sample materialization if called from coordination aggregator
-        if (isCoord && needsMaterialization()) {
-            for (int i = 0; i < result.size(); i++) {
-                result.set(i, materializeSamples(result.get(i)));
+            // Apply sample materialization if called from coordination aggregator
+            if (isCoord && needsMaterialization()) {
+                result.replaceAll(this::materializeSamples);
             }
-        }
 
-        return result;
+            return result;
+        }
     }
 
     /**

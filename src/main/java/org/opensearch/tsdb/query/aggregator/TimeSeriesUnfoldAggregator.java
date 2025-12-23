@@ -395,9 +395,9 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
             }
 
             // Handle the last stage specially if it's an AbstractGroupingStage
-            UnaryPipelineStage lastStage = stages.get(stages.size() - 1);
+            UnaryPipelineStage lastStage = stages.getLast();
             if (lastStage instanceof AbstractGroupingStage groupingStage) {
-                // Call process without materialization (materialize=false)
+                // Call process without materialization (isCoord=false)
                 // The materialization will happen during the reduce phase
                 processedTimeSeries = groupingStage.process(processedTimeSeries, false);
             } else {
