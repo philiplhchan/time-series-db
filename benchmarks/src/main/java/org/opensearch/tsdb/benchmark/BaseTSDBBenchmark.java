@@ -8,20 +8,25 @@
 package org.opensearch.tsdb.benchmark;
 
 import org.apache.logging.log4j.core.config.Configurator;
+import org.apache.lucene.index.CompositeReaderContext;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.FilterDirectoryReader;
+import org.apache.lucene.index.IndexReaderContext;
 import org.apache.lucene.index.LeafReader;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.QueryCache;
 import org.apache.lucene.search.QueryCachingPolicy;
+import org.apache.lucene.search.ScoreMode;
+import org.apache.lucene.search.Weight;
 import org.opensearch.Version;
 import org.opensearch.cluster.ClusterModule;
 import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.common.TriFunction;
 import org.opensearch.common.lease.Releasable;
 import org.opensearch.common.lease.Releasables;
+import org.opensearch.common.lucene.search.Queries;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.util.BigArrays;
 import org.opensearch.common.util.MockBigArrays;
@@ -48,10 +53,17 @@ import org.opensearch.index.shard.SearchOperationListener;
 import org.opensearch.plugins.SearchPlugin;
 import org.opensearch.script.ScriptService;
 import org.opensearch.search.SearchModule;
+import org.opensearch.search.aggregations.AbstractAggregationBuilder;
+import org.opensearch.search.aggregations.AggregationBuilder;
+import org.opensearch.search.aggregations.Aggregator;
 import org.opensearch.search.aggregations.AggregatorFactories;
+import org.opensearch.search.aggregations.AggregatorTestCase;
 import org.opensearch.search.aggregations.BucketCollectorProcessor;
+import org.opensearch.search.aggregations.CardinalityUpperBound;
+import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.aggregations.MultiBucketConsumerService;
 import org.opensearch.search.aggregations.SearchContextAggregations;
+import org.opensearch.search.aggregations.pipeline.PipelineAggregator;
 import org.opensearch.search.aggregations.support.ValuesSourceRegistry;
 import org.opensearch.search.fetch.FetchPhase;
 import org.opensearch.search.fetch.subphase.FetchDocValuesPhase;
@@ -73,6 +85,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -82,6 +95,7 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static org.hamcrest.Matchers.instanceOf;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
@@ -149,6 +163,11 @@ public abstract class BaseTSDBBenchmark {
         rewritten = indexSearcher.rewrite(query);
         searchContext = createSearchContext(indexSearcher, createIndexSettings(), query, bucketConsumer);
 
+    }
+
+    protected void afterEachInvocation() {
+        Releasables.close(releasables);
+        releasables.clear();
     }
 
     protected void tearDownBenchmark() throws IOException {
@@ -227,7 +246,7 @@ public abstract class BaseTSDBBenchmark {
         }
     }
 
-    private MultiBucketConsumerService.MultiBucketConsumer createBucketConsumer() {
+    protected MultiBucketConsumerService.MultiBucketConsumer createBucketConsumer() {
         return new MultiBucketConsumerService.MultiBucketConsumer(
             DEFAULT_MAX_BUCKETS,
             circuitBreakerService.getBreaker(CircuitBreaker.REQUEST)
@@ -388,6 +407,66 @@ public abstract class BaseTSDBBenchmark {
 
     protected NamedWriteableRegistry writableRegistry() {
         return new NamedWriteableRegistry(ClusterModule.getNamedWriteables());
+    }
+
+    protected <A extends InternalAggregation, C extends Aggregator, AB extends AbstractAggregationBuilder<AB>> A searchAndReduce(
+            IndexSearcher searcher,
+            SearchContext searchContext,
+            Query query,
+            AbstractAggregationBuilder<AB> builder
+    ) throws IOException {
+        final PipelineAggregator.PipelineTree pipelines = builder.buildPipelineTree();
+        C root = createAggregator(builder, searchContext);
+        return searchAndReduce(indexSearcher, query, root, pipelines);
+    }
+
+    protected <A extends InternalAggregation, AB extends AbstractAggregationBuilder<AB>> A searchAndReduce(
+            IndexSearcher searcher,
+            Query query,
+            Aggregator root,
+            PipelineAggregator.PipelineTree pipelines
+    ) throws IOException {
+        List<InternalAggregation> aggs = new ArrayList<>();
+        Query rewritten = searcher.rewrite(query);
+
+        root.preCollection();
+        searcher.search(rewritten, root);
+        root.postCollection();
+        aggs.add(root.buildTopLevel());
+
+        // now do the final reduce
+        MultiBucketConsumerService.MultiBucketConsumer reduceBucketConsumer = new MultiBucketConsumerService.MultiBucketConsumer(
+                DEFAULT_MAX_BUCKETS,
+                new NoneCircuitBreakerService().getBreaker(CircuitBreaker.REQUEST)
+        );
+        InternalAggregation.ReduceContext context = InternalAggregation.ReduceContext.forFinalReduction(
+                root.context().bigArrays(),
+                getMockScriptService(),
+                reduceBucketConsumer,
+                pipelines
+        );
+
+        @SuppressWarnings("unchecked")
+        A internalAgg = (A) aggs.get(0).reduce(aggs, context);
+
+        // materialize any parent pipelines
+        internalAgg = (A) internalAgg.reducePipelines(internalAgg, context, pipelines);
+
+        // materialize any sibling pipelines at top level
+        for (PipelineAggregator pipelineAggregator : pipelines.aggregators()) {
+            internalAgg = (A) pipelineAggregator.reduce(internalAgg, context);
+        }
+        return internalAgg;
+    }
+
+    protected <A extends Aggregator, AB extends AbstractAggregationBuilder<AB>> A
+    createAggregator(AbstractAggregationBuilder<AB> aggregationBuilder, SearchContext searchContext)
+            throws IOException {
+        @SuppressWarnings("unchecked")
+        A aggregator = (A) ((AbstractAggregationBuilder<AB>) aggregationBuilder.rewrite(searchContext.getQueryShardContext()))
+                .build(searchContext.getQueryShardContext(), null)
+                .create(searchContext, null, CardinalityUpperBound.ONE);
+        return aggregator;
     }
 
     private static class MetricsDirectoryReader extends FilterDirectoryReader {

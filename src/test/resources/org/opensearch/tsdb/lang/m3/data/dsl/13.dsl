@@ -174,48 +174,6 @@
             },
             "boost" : 1.0
           }
-        },
-        {
-          "time_range_pruner" : {
-            "min_timestamp" : 999700000,
-            "max_timestamp" : 1001000000,
-            "query" : {
-              "bool" : {
-                "filter" : [
-                  {
-                    "range" : {
-                      "timestamp_range" : {
-                        "from" : 999700000,
-                        "to" : 1001000000,
-                        "include_lower" : true,
-                        "include_upper" : false,
-                        "boost" : 1.0
-                      }
-                    }
-                  },
-                  {
-                    "terms" : {
-                      "labels" : [
-                        "service:logger"
-                      ],
-                      "boost" : 1.0
-                    }
-                  },
-                  {
-                    "terms" : {
-                      "labels" : [
-                        "name:attempts"
-                      ],
-                      "boost" : 1.0
-                    }
-                  }
-                ],
-                "adjust_pure_negative" : true,
-                "boost" : 1.0
-              }
-            },
-            "boost" : 1.0
-          }
         }
       ],
       "adjust_pure_negative" : true,
@@ -461,62 +419,18 @@
         }
       }
     },
-    "16" : {
-      "filter" : {
-        "time_range_pruner" : {
-          "min_timestamp" : 999700000,
-          "max_timestamp" : 1001000000,
-          "query" : {
-            "bool" : {
-              "filter" : [
-                {
-                  "range" : {
-                    "timestamp_range" : {
-                      "from" : 999700000,
-                      "to" : 1001000000,
-                      "include_lower" : true,
-                      "include_upper" : false,
-                      "boost" : 1.0
-                    }
-                  }
-                },
-                {
-                  "terms" : {
-                    "labels" : [
-                      "service:logger"
-                    ],
-                    "boost" : 1.0
-                  }
-                },
-                {
-                  "terms" : {
-                    "labels" : [
-                      "name:attempts"
-                    ],
-                    "boost" : 1.0
-                  }
-                }
-              ],
-              "adjust_pure_negative" : true,
-              "boost" : 1.0
-            }
-          },
-          "boost" : 1.0
-        }
-      },
-      "aggregations" : {
-        "16_unfold" : {
-          "time_series_unfold" : {
-            "min_timestamp" : 999700000,
-            "max_timestamp" : 1001000000,
-            "step" : 100000,
-            "stages" : [
-              {
-                "type" : "sum"
-              }
-            ]
+    "16_coordinator" : {
+      "coordinator_pipeline" : {
+        "buckets_path" : [ ],
+        "stages" : [
+          {
+            "type" : "_copy"
           }
-        }
+        ],
+        "references" : {
+          "16_unfold" : "2>2_unfold"
+        },
+        "inputReference" : "16_unfold"
       }
     },
     "4" : {
@@ -614,7 +528,7 @@
         ],
         "references" : {
           "14" : "14",
-          "16" : "16>16_unfold"
+          "16" : "16_coordinator"
         },
         "inputReference" : "14"
       }

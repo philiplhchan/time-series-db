@@ -94,6 +94,12 @@ public interface Labels {
     Labels withLabels(Map<String, String> newLabels);
 
     /**
+     * Deep copy the contents of the labels
+     * @return a newly copied label
+     */
+    Labels deepCopy();
+
+    /**
      * Extract sorted names (label names) from this Labels instance.
      * Returns a list of all label names sorted by name.
      *

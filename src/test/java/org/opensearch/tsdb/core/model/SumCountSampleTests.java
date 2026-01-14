@@ -95,6 +95,11 @@ public class SumCountSampleTests extends OpenSearchTestCase {
             public void writeTo(org.opensearch.core.common.io.stream.StreamOutput out) throws IOException {
                 throw new UnsupportedOperationException();
             }
+
+            @Override
+            public Sample deepCopy() {
+                throw new UnsupportedOperationException();
+            }
         };
 
         IllegalArgumentException e = expectThrows(IllegalArgumentException.class, () -> SumCountSample.fromSample(mockSample));

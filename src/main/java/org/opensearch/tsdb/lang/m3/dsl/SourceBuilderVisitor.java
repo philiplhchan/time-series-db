@@ -30,6 +30,7 @@ import org.opensearch.tsdb.lang.m3.stage.AbsStage;
 import org.opensearch.tsdb.lang.m3.stage.AliasByTagsStage;
 import org.opensearch.tsdb.lang.m3.stage.AliasStage;
 import org.opensearch.tsdb.lang.m3.stage.AsPercentStage;
+import org.opensearch.tsdb.lang.m3.stage.CopyStage;
 import org.opensearch.tsdb.lang.m3.stage.ExcludeByTagStage;
 import org.opensearch.tsdb.lang.m3.stage.FallbackSeriesBinaryStage;
 import org.opensearch.tsdb.lang.m3.stage.FallbackSeriesUnaryStage;
@@ -102,6 +103,7 @@ import org.opensearch.tsdb.query.utils.AggregationConstants;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -166,12 +168,14 @@ public class SourceBuilderVisitor extends M3PlanVisitor<SourceBuilderVisitor.Com
 
         // Adjusted truncate start time (may be earlier than query start due to summarize alignment)
         private Long truncateStartTime; // null means not yet set, use query start time
+        private final Map<CacheableUnfoldAggregation, String> cacheableUnfoldReferences;
 
         private Context(long timeBuffer, long timeShift, boolean timeBufferAdjusted, Long truncateStartTime) {
             this.timeBuffer = timeBuffer;
             this.timeShift = timeShift;
             this.timeBufferAdjusted = timeBufferAdjusted;
             this.truncateStartTime = truncateStartTime;
+            this.cacheableUnfoldReferences = new HashMap<>();
         }
 
         private static Context newContext() {
@@ -313,21 +317,37 @@ public class SourceBuilderVisitor extends M3PlanVisitor<SourceBuilderVisitor.Com
             TSDBMetrics.incrementCounter(METRICS.pushdownRequestsTotal, 1, Tags.create().addTag("mode", "disabled"));
         }
 
-        TimeSeriesUnfoldAggregationBuilder unfoldPipelineAggregationBuilder = new TimeSeriesUnfoldAggregationBuilder(
-            unfoldName,
-            unfoldStages,
-            fetchTimeRange.start(),
-            fetchTimeRange.end(),
-            params.step()
-        );
-
         ComponentHolder holder = new ComponentHolder(planNode.getId());
 
-        // Set the query for the FetchPlanNode
-        holder.setQuery(buildQueryForFetch(planNode, fetchTimeRange));
+        QueryBuilder query = buildQueryForFetch(planNode, fetchTimeRange);
 
-        // Set the unfold aggregation builder for the FetchPlanNode
-        holder.setUnfoldAggregationBuilder(unfoldPipelineAggregationBuilder);
+        // Set the query for the FetchPlanNode
+        holder.setQuery(query);
+
+        CacheableUnfoldAggregation cacheEntry = new CacheableUnfoldAggregation(query, unfoldStages, fetchTimeRange);
+
+        String finalUnfoldName = unfoldName;
+        if (context.cacheableUnfoldReferences.containsKey(cacheEntry)) {
+            // we have seen exactly the same unfold query + stages before, reuse it
+            finalUnfoldName = context.cacheableUnfoldReferences.get(cacheEntry);
+            // we need to copy the cached result, as later there could be some in place modification of the time series
+            stageStack.push(new CopyStage());
+        } else {
+            TimeSeriesUnfoldAggregationBuilder unfoldPipelineAggregationBuilder = new TimeSeriesUnfoldAggregationBuilder(
+                    unfoldName,
+                    unfoldStages,
+                    fetchTimeRange.start(),
+                    fetchTimeRange.end(),
+                    params.step()
+            );
+
+            // Set the unfold aggregation builder for the FetchPlanNode
+            holder.setUnfoldAggregationBuilder(unfoldPipelineAggregationBuilder);
+            // the reference name here should be the name after lifting
+            // since if there's any chance this cache is useful, then this unfold will be eventually lifted to a filter aggregator
+            // and whoever refer to this will need a fully qualified name, e.g. '0>0_unfold'
+            context.cacheableUnfoldReferences.put(cacheEntry, planNode.getId() + AggregationConstants.BUCKETS_PATH_SEPARATOR + unfoldName);
+        }
 
         // Add remaining stages to coordinator aggregation
         if (!stageStack.isEmpty()) {
@@ -342,7 +362,7 @@ public class SourceBuilderVisitor extends M3PlanVisitor<SourceBuilderVisitor.Com
                     planNode.getId() + COORDINATOR_NAME_SUFFIX,
                     stages,
                     EMPTY_MAP,
-                    Map.of(unfoldName, unfoldName),
+                    Map.of(unfoldName, finalUnfoldName),
                     unfoldName
                 )
             );
@@ -898,7 +918,8 @@ public class SourceBuilderVisitor extends M3PlanVisitor<SourceBuilderVisitor.Com
                         merged.addFilterAggregationBuilder(existing); // lift the existing FilterAggregationBuilder
                         filteredQueries.add(existing.getFilter()); // collect the existing Filter, to merge later
                     }
-                } else {
+                } else if (holder.getUnfoldAggregationBuilder() != null) {
+                    // the unfold aggregation builder could be null as we may just refer to a cached unfold aggregation
                     FilterAggregationBuilder filterAgg = new FilterAggregationBuilder(String.valueOf(holder.getId()), holder.getQuery());
                     filterAgg.subAggregation(holder.getUnfoldAggregationBuilder());
                     merged.addFilterAggregationBuilder(filterAgg);
@@ -985,10 +1006,29 @@ public class SourceBuilderVisitor extends M3PlanVisitor<SourceBuilderVisitor.Com
             }
 
             // TODO: Leverage TimeSeriesCoordinatorAggregationBuilder's macro functionality to merge multiple pipeline aggs into one
-            for (PipelineAggregationBuilder pipelineAgg : pipelineAggregationBuilders) {
+            for (PipelineAggregationBuilder pipelineAgg : reorderPipelineAggregations()) {
                 searchSourceBuilder.aggregation(pipelineAgg);
             }
             return searchSourceBuilder;
+        }
+
+        private List<TimeSeriesCoordinatorAggregationBuilder> reorderPipelineAggregations() {
+            // reorder such that the pipeline aggregation with CopyStages will be executed first
+            // It's necessary since otherwise the CopyStage may not be able to copy the original copy
+            // And it is safe since currently all CopyStage will only be in unary pipelines and won't affect
+            // the evaluation order of the binary (or more operands) operations, as they will be after the unary operations anyway
+            List<TimeSeriesCoordinatorAggregationBuilder> reordered = new ArrayList<>();
+            for (TimeSeriesCoordinatorAggregationBuilder pipelineAgg : pipelineAggregationBuilders) {
+                if (pipelineAgg.getStages().getFirst() instanceof CopyStage) {
+                    reordered.add(pipelineAgg);
+                }
+            }
+            for (TimeSeriesCoordinatorAggregationBuilder pipelineAgg : pipelineAggregationBuilders) {
+                if (!(pipelineAgg.getStages().getFirst() instanceof CopyStage)) {
+                    reordered.add(pipelineAgg);
+                }
+            }
+            return reordered;
         }
     }
 
@@ -1012,5 +1052,8 @@ public class SourceBuilderVisitor extends M3PlanVisitor<SourceBuilderVisitor.Com
         public void cleanup() {
             pushdownRequestsTotal = null;
         }
+    }
+
+    private record CacheableUnfoldAggregation(QueryBuilder query, List<UnaryPipelineStage> stages, TimeRange fetchTimeRange) {
     }
 }

@@ -39,40 +39,6 @@
         },
         {
           "time_range_pruner" : {
-            "min_timestamp" : 996400000,
-            "max_timestamp" : 1001000000,
-            "query" : {
-              "bool" : {
-                "filter" : [
-                  {
-                    "range" : {
-                      "timestamp_range" : {
-                        "from" : 996400000,
-                        "to" : 1001000000,
-                        "include_lower" : true,
-                        "include_upper" : false,
-                        "boost" : 1.0
-                      }
-                    }
-                  },
-                  {
-                    "terms" : {
-                      "labels" : [
-                        "region:west"
-                      ],
-                      "boost" : 1.0
-                    }
-                  }
-                ],
-                "adjust_pure_negative" : true,
-                "boost" : 1.0
-              }
-            },
-            "boost" : 1.0
-          }
-        },
-        {
-          "time_range_pruner" : {
             "min_timestamp" : 910000000,
             "max_timestamp" : 914600000,
             "query" : {
@@ -200,59 +166,6 @@
         }
       }
     },
-    "4" : {
-      "filter" : {
-        "time_range_pruner" : {
-          "min_timestamp" : 996400000,
-          "max_timestamp" : 1001000000,
-          "query" : {
-            "bool" : {
-              "filter" : [
-                {
-                  "range" : {
-                    "timestamp_range" : {
-                      "from" : 996400000,
-                      "to" : 1001000000,
-                      "include_lower" : true,
-                      "include_upper" : false,
-                      "boost" : 1.0
-                    }
-                  }
-                },
-                {
-                  "terms" : {
-                    "labels" : [
-                      "region:west"
-                    ],
-                    "boost" : 1.0
-                  }
-                }
-              ],
-              "adjust_pure_negative" : true,
-              "boost" : 1.0
-            }
-          },
-          "boost" : 1.0
-        }
-      },
-      "aggregations" : {
-        "4_unfold" : {
-          "time_series_unfold" : {
-            "min_timestamp" : 996400000,
-            "max_timestamp" : 1001000000,
-            "step" : 100000,
-            "stages" : [
-              {
-                "type" : "sum",
-                "group_by_labels" : [
-                  "city_name"
-                ]
-              }
-            ]
-          }
-        }
-      }
-    },
     "8" : {
       "filter" : {
         "time_range_pruner" : {
@@ -359,6 +272,29 @@
         }
       }
     },
+    "4_coordinator" : {
+      "coordinator_pipeline" : {
+        "buckets_path" : [ ],
+        "stages" : [
+          {
+            "type" : "_copy"
+          },
+          {
+            "type" : "transform_null",
+            "fill_value" : 0.0
+          },
+          {
+            "type" : "moving",
+            "interval" : 3600000,
+            "function" : "sum"
+          }
+        ],
+        "references" : {
+          "4_unfold" : "0>0_unfold"
+        },
+        "inputReference" : "4_unfold"
+      }
+    },
     "0_coordinator" : {
       "coordinator_pipeline" : {
         "buckets_path" : [ ],
@@ -377,26 +313,6 @@
           "0_unfold" : "0>0_unfold"
         },
         "inputReference" : "0_unfold"
-      }
-    },
-    "4_coordinator" : {
-      "coordinator_pipeline" : {
-        "buckets_path" : [ ],
-        "stages" : [
-          {
-            "type" : "transform_null",
-            "fill_value" : 0.0
-          },
-          {
-            "type" : "moving",
-            "interval" : 3600000,
-            "function" : "sum"
-          }
-        ],
-        "references" : {
-          "4_unfold" : "4>4_unfold"
-        },
-        "inputReference" : "4_unfold"
       }
     },
     "8_coordinator" : {

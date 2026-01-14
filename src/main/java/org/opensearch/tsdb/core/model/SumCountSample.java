@@ -136,6 +136,11 @@ public record SumCountSample(long getTimestamp, double sum, long count) implemen
         out.writeVLong(count);
     }
 
+    @Override
+    public Sample deepCopy() {
+        return new SumCountSample(getTimestamp, sum, count);
+    }
+
     /**
      * Create a SumCountSample instance from the input stream for deserialization.
      *

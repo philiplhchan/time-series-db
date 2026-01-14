@@ -14,6 +14,7 @@ import org.opensearch.search.aggregations.bucket.filter.FilterAggregationBuilder
 import org.opensearch.search.aggregations.bucket.filter.InternalFilter;
 import org.opensearch.index.query.MatchAllQueryBuilder;
 import org.opensearch.tsdb.core.chunk.Encoding;
+import org.opensearch.tsdb.lang.m3.stage.CopyStage;
 import org.opensearch.tsdb.query.stage.PipelineStage;
 import org.opensearch.tsdb.core.head.MemChunk;
 import org.opensearch.tsdb.core.index.closed.ClosedChunkIndex;
@@ -21,14 +22,15 @@ import org.opensearch.tsdb.core.model.FloatSample;
 import org.opensearch.tsdb.core.model.Sample;
 import org.opensearch.tsdb.core.model.Labels;
 import org.opensearch.tsdb.core.model.ByteLabels;
-import org.opensearch.tsdb.core.head.MemChunk;
 
 import static org.opensearch.tsdb.TestUtils.assertSamplesEqual;
+import org.opensearch.tsdb.lang.m3.stage.AliasStage;
 import org.opensearch.tsdb.lang.m3.stage.ScaleStage;
 import org.opensearch.tsdb.lang.m3.stage.SumStage;
 import org.opensearch.tsdb.lang.m3.stage.AsPercentStage;
 import org.opensearch.tsdb.lang.m3.stage.AvgStage;
 import org.opensearch.tsdb.lang.m3.stage.PercentileOfSeriesStage;
+import org.opensearch.tsdb.lang.m3.stage.UnionStage;
 import org.opensearch.tsdb.query.aggregator.InternalTimeSeries;
 import org.opensearch.tsdb.query.aggregator.TimeSeriesUnfoldAggregationBuilder;
 import org.opensearch.tsdb.query.aggregator.TimeSeriesCoordinatorAggregationBuilder;
@@ -857,6 +859,104 @@ public class TSAggregationPluginTests extends TimeSeriesAggregatorTestCase {
                 coordinatorSamples,
                 SAMPLE_COMPARISON_DELTA
             );
+        });
+    }
+
+    /**
+     * Test shows the necessity of CopyStage
+     * the first part shows that if there's no CopyStage, the output series will be in-place modified
+     * by the AliasStage and all alias will become 'bbb'
+     *
+     * the second part shows that using the CopyStage avoid this kind of reference modification
+     */
+    public void testUsageOfCopyStage() throws Exception {
+
+        GlobalAggregationBuilder globalAgg = new GlobalAggregationBuilder("global").subAggregation(
+            new TimeSeriesUnfoldAggregationBuilder("unfold_a", List.of(new ScaleStage(1.0)), 1000L, 3000L, 1000L)
+        )
+            .subAggregation(
+                new TimeSeriesCoordinatorAggregationBuilder(
+                    "coord_0",
+                    List.of(new AliasStage("aaa")),
+                    new LinkedHashMap<>(),
+                    Map.of("input_a", "unfold_a"),
+                    "input_a"
+                )
+            )
+            .subAggregation(
+                new TimeSeriesCoordinatorAggregationBuilder(
+                    "coord_1",
+                    List.of(new AliasStage("bbb")),
+                    new LinkedHashMap<>(),
+                    Map.of("input_b", "unfold_a"),
+                    "input_b"
+                )
+            )
+            .subAggregation(
+                new TimeSeriesCoordinatorAggregationBuilder(
+                    "coordinator",
+                    List.of(new UnionStage("input_b")),
+                    new LinkedHashMap<>(),
+                    Map.of("input_a", "coord_0", "input_b", "coord_1"),
+                    "input_a" // Main input is "a", but macro uses "b"
+                )
+            );
+
+        testCaseWithClosedChunkIndex(globalAgg, new MatchAllDocsQuery(), index -> {
+            createTimeSeriesDocument(index, "metric_a", "instance", "server1", 1000L, 10.0);
+            createTimeSeriesDocument(index, "metric_b", "instance", "server1", 1000L, 100.0);
+        }, (InternalGlobal result) -> {
+            InternalTimeSeries coordinatorResult = result.getAggregations().get("coordinator");
+            coordinatorResult.getTimeSeries().forEach(series -> { assertEquals("bbb", series.getAlias()); });
+        });
+
+        globalAgg = new GlobalAggregationBuilder("global").subAggregation(
+            new TimeSeriesUnfoldAggregationBuilder("unfold_a", List.of(new ScaleStage(1.0)), 1000L, 3000L, 1000L)
+        )
+            .subAggregation(
+                new TimeSeriesCoordinatorAggregationBuilder(
+                    "coord_0",
+                    List.of(new CopyStage(), new AliasStage("aaa")),
+                    new LinkedHashMap<>(),
+                    Map.of("input_a", "unfold_a"),
+                    "input_a"
+                )
+            )
+            .subAggregation(
+                new TimeSeriesCoordinatorAggregationBuilder(
+                    "coord_1",
+                    List.of(new AliasStage("bbb")),
+                    new LinkedHashMap<>(),
+                    Map.of("input_b", "unfold_a"),
+                    "input_b"
+                )
+            )
+            .subAggregation(
+                new TimeSeriesCoordinatorAggregationBuilder(
+                    "coordinator",
+                    List.of(new UnionStage("input_b")),
+                    new LinkedHashMap<>(),
+                    Map.of("input_a", "coord_0", "input_b", "coord_1"),
+                    "input_a" // Main input is "a", but macro uses "b"
+                )
+            );
+
+        testCaseWithClosedChunkIndex(globalAgg, new MatchAllDocsQuery(), index -> {
+            createTimeSeriesDocument(index, "metric_a", "instance", "server1", 1000L, 10.0);
+            createTimeSeriesDocument(index, "metric_b", "instance", "server1", 1000L, 100.0);
+        }, (InternalGlobal result) -> {
+            InternalTimeSeries coordinatorResult = result.getAggregations().get("coordinator");
+            int aCount = 0;
+            int bCount = 0;
+            for (TimeSeries series : coordinatorResult.getTimeSeries()) {
+                if (series.getAlias().equals("aaa")) {
+                    aCount++;
+                } else if (series.getAlias().equals("bbb")) {
+                    bCount++;
+                }
+            }
+            assertEquals(2, aCount);
+            assertEquals(2, bCount);
         });
     }
 

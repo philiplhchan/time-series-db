@@ -10,6 +10,7 @@ package org.opensearch.tsdb.query.aggregator;
 import org.opensearch.tsdb.core.model.Labels;
 import org.opensearch.tsdb.core.model.Sample;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -66,11 +67,6 @@ public class TimeSeries {
     private final long minTimestamp; // Minimum timestamp boundary (inclusive) - defines the start of time range
     private final long maxTimestamp; // Maximum timestamp boundary (inclusive) - defines the end of time range
     private final long step; // Step size between samples
-
-    // TODO: add copy constructor utils, currently every stage is mutating/copying
-    // the input time series in different ways. This is very error prone, and
-    // can result in programmers forgetting to propagate certain required fields
-    // (e.g. labels) to the output series.
 
     /**
      * Constructor for creating a TimeSeries with all parameters.
@@ -236,5 +232,13 @@ public class TimeSeries {
             + ", step="
             + step
             + '}';
+    }
+
+    public TimeSeries deepcopy() {
+        List<Sample> newSamples = new ArrayList<>(samples.size());
+        for (Sample sample : samples) {
+            newSamples.add(sample.deepCopy());
+        }
+        return new TimeSeries(newSamples, labels.deepCopy(), minTimestamp, maxTimestamp, step, alias);
     }
 }

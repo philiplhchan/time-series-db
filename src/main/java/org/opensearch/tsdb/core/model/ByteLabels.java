@@ -590,6 +590,11 @@ public class ByteLabels implements Labels {
         return encodeLabels(merged);
     }
 
+    @Override
+    public Labels deepCopy() {
+        return fromRawBytes(Arrays.copyOf(data, data.length));
+    }
+
     /**
      * Finds the position where a label should be inserted or updated.
      * Returns information about whether the label exists and where to insert/update.

@@ -71,6 +71,11 @@ public interface Sample {
     void writeTo(StreamOutput out) throws IOException;
 
     /**
+     * Deep copy of the sample
+     */
+    Sample deepCopy();
+
+    /**
      * Create a sample instance from the input stream for deserialization.
      * This is a static factory method that should be implemented by each sample class.
      *

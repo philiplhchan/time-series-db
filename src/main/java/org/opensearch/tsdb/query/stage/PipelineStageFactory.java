@@ -16,6 +16,7 @@ import org.opensearch.tsdb.lang.m3.stage.AvgStage;
 import org.opensearch.tsdb.lang.m3.stage.ExcludeByTagStage;
 import org.opensearch.tsdb.lang.m3.stage.FallbackSeriesBinaryStage;
 import org.opensearch.tsdb.lang.m3.stage.CountStage;
+import org.opensearch.tsdb.lang.m3.stage.CopyStage;
 import org.opensearch.tsdb.lang.m3.stage.DivideStage;
 import org.opensearch.tsdb.lang.m3.stage.FallbackSeriesUnaryStage;
 import org.opensearch.tsdb.lang.m3.stage.HistogramPercentileStage;
@@ -145,6 +146,7 @@ public class PipelineStageFactory {
             registerStage(TruncateStage.class);
             registerStage(UnionStage.class);
             registerStage(ValueFilterStage.class);
+            registerStage(CopyStage.class);
         } catch (Exception e) {
             throw new RuntimeException("Failed to auto-register pipeline stages", e);
         }

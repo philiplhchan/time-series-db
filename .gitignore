@@ -68,3 +68,5 @@ doc-tools/missing-doclet/bin/
 # JavaCC generated files
 **/generated/
 
+# JFR profiling files
+*.jfr

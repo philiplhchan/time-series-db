@@ -82,6 +82,11 @@ public class SortedValuesSample implements Sample, Writeable {
         out.writeCollection(values, StreamOutput::writeDouble);
     }
 
+    @Override
+    public Sample deepCopy() {
+        return new SortedValuesSample(timestamp, new ArrayList<>(values));
+    }
+
     /**
      * Read a SortedValuesSample from the input stream.
      *

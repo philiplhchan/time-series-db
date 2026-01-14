@@ -74,6 +74,11 @@ public class FloatSample implements Sample {
         out.writeDouble(value);
     }
 
+    @Override
+    public Sample deepCopy() {
+        return new FloatSample(timestamp, value);
+    }
+
     /**
      * Create a FloatSample instance from the input stream for deserialization.
      *
