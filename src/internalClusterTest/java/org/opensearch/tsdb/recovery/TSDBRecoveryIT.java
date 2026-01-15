@@ -32,11 +32,13 @@ import org.opensearch.index.recovery.RecoveryStats;
 import org.opensearch.index.seqno.SequenceNumbers;
 import org.opensearch.index.shard.IndexShard;
 import org.opensearch.index.store.StoreStats;
+import org.opensearch.index.translog.Translog;
 import org.opensearch.indices.NodeIndicesStats;
 import org.opensearch.indices.recovery.PeerRecoverySourceService;
 import org.opensearch.indices.recovery.PeerRecoveryTargetService;
 import org.opensearch.indices.recovery.RecoverySettings;
 import org.opensearch.indices.recovery.RecoveryState;
+import org.opensearch.indices.recovery.RecoveryTranslogOperationsRequest;
 import org.opensearch.indices.recovery.StartRecoveryRequest;
 import org.opensearch.indices.replication.common.ReplicationLuceneIndex;
 import org.opensearch.indices.IndicesService;
@@ -52,13 +54,16 @@ import org.opensearch.tsdb.framework.models.TimeSeriesSample;
 import org.hamcrest.Matcher;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Spliterators;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
@@ -69,7 +74,6 @@ import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.lessThanOrEqualTo;
-import static org.junit.Assert.assertFalse;
 import static org.opensearch.indices.recovery.RecoverySettings.INDICES_RECOVERY_CHUNK_SIZE_SETTING;
 import static org.opensearch.test.hamcrest.OpenSearchAssertions.assertAcked;
 
@@ -926,4 +930,193 @@ public class TSDBRecoveryIT extends TSDBRecoveryITBase {
             equalTo(0L)
         );
     }
+
+    /**
+     * Tests that translog operations are replayed in forward order during peer recovery.
+     *
+     * <p>Scenario:
+     * <ol>
+     *   <li>Create TSDB index with small translog generation threshold</li>
+     *   <li>Index time series samples in multiple batches with force flush between batches</li>
+     *   <li>Force flush creates multiple translog generations</li>
+     *   <li>Add replica to trigger peer recovery</li>
+     *   <li>Intercept TRANSLOG_OPS action to track operation replay order</li>
+     *   <li>Verify operations are replayed in ascending seqNo order (forward read)</li>
+     * </ol>
+     *
+     * <p>This test verifies that the {@code index.translog.read_forward=true} setting
+     * makes translog generations to be read from oldest to newest during recovery.
+     */
+    public void testTranslogReplayInForwardOrderDuringRecovery() throws Exception {
+        logger.info("--> start node A");
+        String nodeA = internalCluster().startNode();
+
+        HashMap<String, Object> settings = getDefaultTSDBSettings();
+        settings.put("index.translog.generation_threshold_size", "1kb");  // Force frequent rolling
+        IndexConfig indexConfig = new IndexConfig(INDEX_NAME, 1, 0, settings, parseMappingFromConstants(), null);
+        createTimeSeriesIndex(indexConfig);
+        ensureGreen(INDEX_NAME);
+
+        long baseTimestamp = System.currentTimeMillis();
+        int batchSize = 150;
+        int numBatches = 3;
+        List<Long> expectedSeqNos = new ArrayList<>();
+
+        for (int batch = 0; batch < numBatches; batch++) {
+            List<TimeSeriesSample> samples = generateTimeSeriesSamples(batchSize, baseTimestamp + batch * 30000L, 10000L);
+            ingestSamples(samples, INDEX_NAME);
+            for (int i = 0; i < samples.size(); i++) {
+                expectedSeqNos.add((long) (batch * batchSize + i));
+            }
+            logger.info("--> force flushing to roll translog generation after batch {}", batch);
+            client().admin().indices().prepareFlush(INDEX_NAME).setForce(true).get();
+        }
+
+        logger.info("--> start node B");
+        String nodeB = internalCluster().startNode();
+
+        logger.info("--> setting up interception on node A to track translog operation replay order");
+        MockTransportService transportService = (MockTransportService) internalCluster().getInstance(TransportService.class, nodeA);
+
+        // Track actual seqNo order during recovery
+        List<Long> actualSeqNos = new ArrayList<>();
+
+        transportService.addSendBehavior((connection, requestId, action, request, options) -> {
+            if (action.equals(PeerRecoveryTargetService.Actions.TRANSLOG_OPS)) {
+                // Extract seqNos from the translog operations being sent
+                RecoveryTranslogOperationsRequest translogRequest = (RecoveryTranslogOperationsRequest) request;
+                for (Translog.Operation op : translogRequest.operations()) {
+                    actualSeqNos.add(op.seqNo());
+                }
+                logger.info(
+                    "--> intercepted TRANSLOG_OPS with {} operations, seqNo range: [{}-{}]",
+                    translogRequest.operations().size(),
+                    translogRequest.operations().get(0).seqNo(),
+                    translogRequest.operations().get(translogRequest.operations().size() - 1).seqNo()
+                );
+            }
+            connection.sendRequest(requestId, action, request, options);
+        });
+
+        logger.info("--> adding replica to trigger peer recovery");
+        client().admin().indices().prepareUpdateSettings(INDEX_NAME).setSettings(Settings.builder().put("number_of_replicas", 1)).get();
+        ensureGreen(INDEX_NAME);
+
+        assertThat("Should have replayed all operations", actualSeqNos.size(), equalTo(expectedSeqNos.size()));
+        assertThat(
+            "SeqNos should be in ascending order, proving forward translog read (oldest generation first)",
+            actualSeqNos,
+            equalTo(expectedSeqNos)
+        );
+        validateTSDBRecovery(INDEX_NAME, 0, baseTimestamp, 10000L, expectedSeqNos.size());
+    }
+
+    /**
+     * Tests that empty series are NOT dropped during replica recovery, even when a flush occurs mid-recovery.
+     */
+    public void testDropEmptySeriesNotAllowedDuringRecovery() throws Exception {
+        internalCluster().ensureAtLeastNumDataNodes(randomIntBetween(2, 3));
+
+        final String indexName = "test";
+        IndexConfig indexConfig = createDefaultIndexConfig(indexName, 1, 0);
+        createTimeSeriesIndex(indexConfig);
+        ensureGreen(indexName);
+
+        final long baseTimestamp = System.currentTimeMillis();
+        final long samplesIntervalMillis = 10000L;
+        final AtomicInteger numSamplesIndexed = new AtomicInteger();
+        final AtomicBoolean finished = new AtomicBoolean(false);
+
+        // ingest 1 very old sample, outside of the ooo cut_off window
+        String toBeEmptyLabel = "pod_test";
+        TimeSeriesSample firstSample = new TimeSeriesSample(
+            Instant.ofEpochMilli(baseTimestamp - 48 * 60 * 60 * 1000),
+            0.0,
+            Map.of("metric", "cpu_usage", "instance", toBeEmptyLabel, "env", "prod")
+        );
+        ingestSamples(List.of(firstSample), indexName);
+
+        // ingest 1 sample near the base timestamp
+        TimeSeriesSample secondSample = new TimeSeriesSample(
+            Instant.ofEpochMilli(baseTimestamp - 1000),
+            0.0,
+            Map.of("metric", "cpu_usage", "instance", "pod_0", "env", "prod")
+        );
+        ingestSamples(List.of(secondSample), indexName);
+
+        // add background indexing traffic
+        Thread indexingThread = new Thread(() -> {
+            while (finished.get() == false && numSamplesIndexed.get() < 10_000) {
+                long timestamp = baseTimestamp + (numSamplesIndexed.get() * samplesIntervalMillis);
+                TimeSeriesSample sample = new TimeSeriesSample(
+                    Instant.ofEpochMilli(timestamp),
+                    numSamplesIndexed.get() * 1.0,
+                    Map.of("metric", "cpu_usage", "instance", "pod" + (numSamplesIndexed.get() % 5), "env", "prod")
+                );
+                try {
+                    ingestSamples(List.of(sample), indexName);
+                    numSamplesIndexed.incrementAndGet();
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        });
+        indexingThread.start();
+
+        // ingest 1 sample with the base timestamp and toBeEmptyLabel, if drop empty series is allowed during recovery,
+        // this sample would be dropped during recovery since the series label is empty
+        TimeSeriesSample newSample = new TimeSeriesSample(
+            Instant.ofEpochMilli(baseTimestamp),
+            0.0,
+            Map.of("metric", "cpu_usage", "instance", toBeEmptyLabel, "env", "prod")
+        );
+        ingestSamples(List.of(newSample), indexName);
+
+        // Configure recovery to replay translog operations one at a request batch with minimal chunk size
+        client().admin()
+            .cluster()
+            .prepareUpdateSettings()
+            .setTransientSettings(Settings.builder().put("indices.recovery.chunk_size", "1b"))
+            .get();
+
+        // add replica to trigger peer recovery
+        // Intercept on primary when sending seqNo 2 and do a force flush
+        ClusterState state = client().admin().cluster().prepareState().get().getState();
+        ShardRouting primaryShard = state.routingTable().index(indexName).shard(0).primaryShard();
+        String primaryNodeName = state.nodes().get(primaryShard.currentNodeId()).getName();
+
+        MockTransportService transportService = (MockTransportService) internalCluster().getInstance(
+            TransportService.class,
+            primaryNodeName
+        );
+        transportService.addSendBehavior((connection, requestId, action, request, options) -> {
+            if (action.equals(PeerRecoveryTargetService.Actions.TRANSLOG_OPS)) {
+                RecoveryTranslogOperationsRequest translogRequest = (RecoveryTranslogOperationsRequest) request;
+                for (Translog.Operation op : translogRequest.operations()) {
+                    if (op.seqNo() == 2) {
+                        logger.info("--> intercepting translog operation with seqNo 2, doing a force flush");
+                        client().admin().indices().prepareFlush(indexName).setForce(true).get();
+                        break;
+                    }
+                }
+            }
+            connection.sendRequest(requestId, action, request, options);
+        });
+
+        client().admin()
+            .indices()
+            .prepareUpdateSettings(indexName)
+            .setSettings(Settings.builder().put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1))
+            .get();
+
+        // wait for the indexing thread to finish
+        finished.set(true);
+        indexingThread.join();
+        refresh(indexName);
+        ensureGreen(indexName);
+
+        // validate the recovery
+        validateTSDBRecovery(indexName, 0, baseTimestamp, samplesIntervalMillis, numSamplesIndexed.get() + 1);
+    }
+
 }

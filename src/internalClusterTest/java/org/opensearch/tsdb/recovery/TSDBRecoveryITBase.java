@@ -83,6 +83,7 @@ public abstract class TSDBRecoveryITBase extends TimeSeriesTestFramework {
         settings.put("index.refresh_interval", "1s");
         settings.put("index.queries.cache.enabled", false);
         settings.put("index.requests.cache.enable", false);
+        settings.put("index.translog.read_forward", true);
         return settings;
     }
 

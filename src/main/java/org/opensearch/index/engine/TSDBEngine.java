@@ -615,7 +615,6 @@ public class TSDBEngine extends Engine {
             try {
                 // Check if translog is in recovery mode - skip flush entirely during local recovery
                 try {
-                    // TODO: add IT to verify flush is blocked during local recovery
                     translogManager.ensureCanFlush();
                 } catch (IllegalStateException e) {
                     logger.debug("Skipping flush - translog in local recovery: {}", e.getMessage());
@@ -1304,7 +1303,7 @@ public class TSDBEngine extends Engine {
             builder.startObject();
             builder.field(Constants.IndexSchema.REFERENCE, seriesRef);
 
-            if (isNewSeriesCreated) {
+            if (isNewSeriesCreated || localCheckpointTracker.hasProcessed(index.seqNo())) {
                 builder.field(Constants.IndexSchema.LABELS, metricDocument.rawLabelsString());
             }
 

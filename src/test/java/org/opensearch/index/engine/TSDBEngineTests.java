@@ -18,7 +18,9 @@ import org.opensearch.common.settings.IndexScopedSettings;
 import org.opensearch.common.lucene.index.OpenSearchDirectoryReader;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
+import org.opensearch.common.xcontent.XContentHelper;
 import org.opensearch.common.xcontent.XContentType;
+import org.opensearch.core.xcontent.MediaType;
 import org.opensearch.core.common.bytes.BytesArray;
 import org.opensearch.index.IndexSettings;
 import org.opensearch.index.VersionType;
@@ -30,6 +32,7 @@ import org.opensearch.index.mapper.SourceToParse;
 import org.opensearch.index.mapper.Uid;
 import org.opensearch.index.seqno.SequenceNumbers;
 import org.opensearch.index.store.Store;
+import org.opensearch.index.translog.InternalTranslogManager;
 import org.opensearch.index.translog.Translog;
 import org.opensearch.test.IndexSettingsModule;
 import org.opensearch.threadpool.FixedExecutorBuilder;
@@ -1569,5 +1572,101 @@ public class TSDBEngineTests extends EngineTestCase {
 
         // note : the last reader will have a refCount of 2 until new reader is created during refresh(). so we cannot trigger doClose()
         // call which will trigger dropping of closed series here.
+    }
+
+    public void testFlushIsDisabledDuringTranslogRecovery() throws IOException {
+        // metricsEngine is already recovered in setUp()
+        metricsEngine.translogManager().ensureCanFlush();
+
+        // Create a fresh unrecovered engine with its own store
+        Store store = createStore(indexSettings, newDirectory());
+        try {
+            EngineConfig cfg = config(indexSettings, store, createTempDir(), NoMergePolicy.INSTANCE, null, null, () -> -1L);
+            registerDynamicSettings(cfg.getIndexSettings().getScopedSettings());
+            store.createEmpty(cfg.getIndexSettings().getIndexVersionCreated().luceneVersion);
+            String translogUuid = Translog.createEmptyTranslog(cfg.getTranslogConfig().getTranslogPath(), -1L, shardId, primaryTerm.get());
+            store.associateIndexWithNewTranslog(translogUuid);
+
+            TSDBEngine testEngine = new TSDBEngine(cfg, createTempDir("test"), Clock.systemUTC());
+            try {
+                // Verify ensureCanFlush throws before recovery
+                expectThrows(IllegalStateException.class, testEngine.translogManager()::ensureCanFlush);
+
+                // Recover (or skip randomly)
+                if (randomBoolean()) {
+                    testEngine.translogManager()
+                        .recoverFromTranslog(translogHandler, testEngine.getProcessedLocalCheckpoint(), Long.MAX_VALUE);
+                } else {
+                    testEngine.translogManager().skipTranslogRecovery();
+                }
+
+                // Verify ensureCanFlush works after recovery
+                testEngine.translogManager().ensureCanFlush();
+            } finally {
+                testEngine.close();
+            }
+        } finally {
+            store.close();
+        }
+    }
+
+    public void testHasProcessedIndexOperationRewriteSource() throws IOException {
+        long primaryTerm = 1;
+
+        // First, index a sample normally to establish seqNo 0 as processed
+        String sample1 = createSampleJson(series1, 1000L, 100.0);
+        Engine.IndexResult result1 = publishSample(0, sample1);
+        assertTrue("First sample should be created", result1.isCreated());
+        assertEquals("First sample should have seq no 0", 0L, result1.getSeqNo());
+        assertNotNull("First sample should have translog location", result1.getTranslogLocation());
+
+        // Verify seqNo 0 is now processed
+        assertEquals("Processed checkpoint should be 0", 0L, metricsEngine.getProcessedLocalCheckpoint());
+
+        // Roll translog generation before inserting sample2
+        metricsEngine.translogManager().rollTranslogGeneration();
+
+        // Now try to index with the same seqNo
+        // This simulates the scenario during promotion resync where the same operation would be received twice
+        String sample2 = createSampleJson(series1, 2000L, 200.0);
+        SourceToParse sourceToParse = new SourceToParse("test-index", "1", new BytesArray(sample2), XContentType.JSON, "test-routing");
+        ParsedDocument parsedDoc = mapperService.documentMapper().parse(sourceToParse);
+        Engine.Index indexOp = new Engine.Index(
+            new Term("_id", "1"),
+            parsedDoc,
+            0L, // Same seqNo as the first operation
+            primaryTerm,
+            1L,
+            null,
+            Engine.Operation.Origin.REPLICA,
+            System.nanoTime(),
+            -1,
+            false,
+            UNASSIGNED_SEQ_NO,
+            0
+        );
+
+        Engine.IndexResult result2 = metricsEngine.index(indexOp);
+
+        assertNotNull("Index result should not be null", result2);
+        assertTrue("Index should succeed", result2.isCreated());
+        assertEquals("Index should have correct sequence number", 0L, result2.getSeqNo());
+        assertNotNull("Index with already processed seqNo should have translog location", result2.getTranslogLocation());
+
+        // Verify translog operations have labels
+        InternalTranslogManager translogManager = (InternalTranslogManager) metricsEngine.translogManager();
+        try (Translog.Snapshot snapshot = translogManager.getTranslog().newSnapshot()) {
+            Translog.Operation op;
+            while ((op = snapshot.next()) != null) {
+                assertEquals("Translog operation should have the latest primary term", primaryTerm, op.primaryTerm());
+                Translog.Index indexOperation = (Translog.Index) op;
+
+                // Parse the source to verify labels are present (source is in SMILE binary format)
+                Map<String, Object> sourceMap = XContentHelper.convertToMap(indexOperation.source(), false, (MediaType) XContentType.SMILE)
+                    .v2();
+                assertTrue("Translog operation should have labels field", sourceMap.containsKey("labels"));
+                assertNotNull("Translog operation labels should not be null", sourceMap.get("labels"));
+            }
+        }
     }
 }
