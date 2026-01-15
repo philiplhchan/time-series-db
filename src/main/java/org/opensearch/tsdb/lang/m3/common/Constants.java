@@ -56,8 +56,6 @@ public class Constants {
             "derivative",
             "divideScalar",
             "divideWhen",
-            "execute",
-            "exec",
             "histogramCDF",
             "integral",
             "jainCP",

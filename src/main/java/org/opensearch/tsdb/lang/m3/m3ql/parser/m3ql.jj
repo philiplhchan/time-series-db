@@ -82,14 +82,18 @@ TOKEN : {
   | < EXCLAMATION_MARK: "!" >
 }
 
-// Helper function to consume optional "exec" before "("
-// 'exec(...)' and 'exec    (...)' is treated as equivalent to (...) in M3QL
+// Helper function to consume optional "exec" or "execute" before "("
+// 'exec(...)', 'execute(...)' and 'exec    (...)' are treated as equivalent to (...) in M3QL
 void LeftParen() :
 {}
 {
     (
-        LOOKAHEAD({ getToken(1).kind == IDENTIFIER && "exec".equals(getToken(1).image) && getToken(2).kind == LPAREN })
-        <IDENTIFIER>   // swallow "exec"
+        LOOKAHEAD({ 
+            getToken(1).kind == IDENTIFIER && 
+            ("exec".equals(getToken(1).image) || "execute".equals(getToken(1).image)) && 
+            getToken(2).kind == LPAREN 
+        })
+        <IDENTIFIER>   // swallow "exec" or "execute"
         <LPAREN>
       | <LPAREN>
     )
