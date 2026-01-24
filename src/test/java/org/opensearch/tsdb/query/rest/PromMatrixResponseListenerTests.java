@@ -12,6 +12,13 @@ import org.opensearch.common.xcontent.json.JsonXContent;
 import org.opensearch.core.rest.RestStatus;
 import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.rest.RestResponse;
+import org.opensearch.search.aggregations.Aggregations;
+import org.opensearch.search.profile.ProfileResult;
+import org.opensearch.search.profile.ProfileShardResult;
+import org.opensearch.search.profile.aggregation.AggregationProfileShardResult;
+import org.opensearch.telemetry.metrics.Histogram;
+import org.opensearch.telemetry.metrics.MetricsRegistry;
+import org.opensearch.telemetry.metrics.tags.Tags;
 import org.opensearch.test.OpenSearchTestCase;
 import org.opensearch.test.rest.FakeRestChannel;
 import org.opensearch.test.rest.FakeRestRequest;
@@ -19,16 +26,28 @@ import org.opensearch.tsdb.core.model.ByteLabels;
 import org.opensearch.tsdb.core.model.FloatSample;
 import org.opensearch.tsdb.core.model.Labels;
 import org.opensearch.tsdb.core.model.Sample;
+import org.opensearch.tsdb.metrics.TSDBMetrics;
+import org.opensearch.tsdb.query.aggregator.InternalTimeSeries;
 import org.opensearch.tsdb.query.aggregator.TimeSeries;
+import org.opensearch.tsdb.query.aggregator.TimeSeriesUnfoldAggregator;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasSize;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyDouble;
+import static org.mockito.ArgumentMatchers.doubleThat;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.opensearch.tsdb.query.rest.RestTestUtils.getResultArray;
 import static org.opensearch.tsdb.query.rest.RestTestUtils.parseJsonResponse;
 import static org.opensearch.tsdb.query.rest.RestTestUtils.validateErrorResponse;
@@ -186,7 +205,7 @@ public class PromMatrixResponseListenerTests extends OpenSearchTestCase {
         FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
         PromMatrixResponseListener listener = new PromMatrixResponseListener(channel, TEST_AGG_NAME, false, false);
 
-        List<TimeSeries> emptyList = Collections.emptyList();
+        List<TimeSeries> emptyList = List.of();
         SearchResponse searchResponse = createSearchResponse(TEST_AGG_NAME, emptyList);
         XContentBuilder builder = JsonXContent.contentBuilder();
 
@@ -559,5 +578,322 @@ public class PromMatrixResponseListenerTests extends OpenSearchTestCase {
 
     private SearchResponse createSearchResponseWithException() {
         return new org.opensearch.tsdb.utils.TestDataBuilder.FailingSearchResponse();
+    }
+
+    // ========== Metrics Recording Tests ==========
+
+    /**
+     * Test that query execution latency metric is recorded correctly when profile is disabled.
+     */
+    public void testMetricsRecordingWithoutProfile() throws Exception {
+        // Setup metrics with mocks
+        MetricsRegistry mockRegistry = mock(MetricsRegistry.class);
+        Histogram mockExecutionLatency = mock(Histogram.class);
+
+        // Initialize TSDBMetrics
+        TSDBMetrics.cleanup();
+        TSDBMetrics.initialize(mockRegistry);
+
+        // Create QueryMetrics with only execution latency histogram
+        PromMatrixResponseListener.QueryMetrics queryMetrics = new PromMatrixResponseListener.QueryMetrics(
+            mockExecutionLatency,
+            null,
+            null,
+            null,
+            null,
+            null
+        );
+
+        // Create listener
+        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
+        PromMatrixResponseListener listener = new PromMatrixResponseListener(channel, TEST_AGG_NAME, false, false, queryMetrics);
+
+        // Create search response without profile results
+        List<TimeSeries> timeSeriesList = createTimeSeriesWithLabels();
+        SearchResponse searchResponse = createSearchResponse(TEST_AGG_NAME, timeSeriesList);
+
+        // Act - trigger metrics recording via onResponse
+        listener.onResponse(searchResponse);
+
+        // Assert - execution latency should be recorded, but no phase metrics since profile is disabled
+        verify(mockExecutionLatency, times(1)).record(doubleThat(value -> value >= 0.0), any(Tags.class));
+
+        // Cleanup
+        TSDBMetrics.cleanup();
+    }
+
+    /**
+     * Test that all query metrics are recorded correctly when profile is enabled with valid breakdown times.
+     */
+    public void testMetricsRecordingWithProfileEnabled() throws Exception {
+        // Setup metrics with mocks
+        MetricsRegistry mockRegistry = mock(MetricsRegistry.class);
+        Histogram mockExecutionLatency = mock(Histogram.class);
+        Histogram mockCollectPhaseLatencyMax = mock(Histogram.class);
+        Histogram mockReducePhaseLatencyMax = mock(Histogram.class);
+        Histogram mockCollectPhaseCpuTime = mock(Histogram.class);
+        Histogram mockReducePhaseCpuTime = mock(Histogram.class);
+        Histogram mockShardLatencyMax = mock(Histogram.class);
+
+        // Initialize TSDBMetrics
+        TSDBMetrics.cleanup();
+        TSDBMetrics.initialize(mockRegistry);
+
+        // Create QueryMetrics with all histograms
+        PromMatrixResponseListener.QueryMetrics queryMetrics = new PromMatrixResponseListener.QueryMetrics(
+            mockExecutionLatency,
+            mockCollectPhaseLatencyMax,
+            mockReducePhaseLatencyMax,
+            mockCollectPhaseCpuTime,
+            mockReducePhaseCpuTime,
+            mockShardLatencyMax
+        );
+
+        // Create listener with profile enabled
+        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
+        PromMatrixResponseListener listener = new PromMatrixResponseListener(channel, TEST_AGG_NAME, true, false, queryMetrics);
+
+        // Create search response with profile results
+        SearchResponse searchResponse = createSearchResponseWithProfile(
+            50_000_000L,  // 50ms collect time for shard 1
+            30_000_000L,  // 30ms reduce time for shard 1
+            40_000_000L,  // 40ms collect time for shard 2
+            20_000_000L   // 20ms reduce time for shard 2
+        );
+
+        // Act - trigger metrics recording via onResponse
+        listener.onResponse(searchResponse);
+
+        // Assert - verify all metrics were recorded
+        verify(mockExecutionLatency, times(1)).record(doubleThat(value -> value >= 0.0), any(Tags.class));
+
+        // Max collect phase latency should be 50ms (max of 50ms and 40ms)
+        verify(mockCollectPhaseLatencyMax, times(1)).record(doubleThat(value -> Math.abs(value - 50.0) < 0.001), any(Tags.class));
+
+        // Max reduce phase latency should be 30ms (max of 30ms and 20ms)
+        verify(mockReducePhaseLatencyMax, times(1)).record(doubleThat(value -> Math.abs(value - 30.0) < 0.001), any(Tags.class));
+
+        // Total collect phase CPU time should be 90ms (50ms + 40ms)
+        verify(mockCollectPhaseCpuTime, times(1)).record(doubleThat(value -> Math.abs(value - 90.0) < 0.001), any(Tags.class));
+
+        // Total reduce phase CPU time should be 50ms (30ms + 20ms)
+        verify(mockReducePhaseCpuTime, times(1)).record(doubleThat(value -> Math.abs(value - 50.0) < 0.001), any(Tags.class));
+
+        // Max shard latency should be 80ms (max of (50+30)=80ms and (40+20)=60ms)
+        verify(mockShardLatencyMax, times(1)).record(doubleThat(value -> Math.abs(value - 80.0) < 0.001), any(Tags.class));
+
+        // Cleanup
+        TSDBMetrics.cleanup();
+    }
+
+    /**
+     * Test that metrics recording handles exception gracefully without impacting response.
+     */
+    public void testMetricsRecordingDoesNotFailQueryOnException() throws Exception {
+        // Setup metrics with a histogram that throws exception
+        MetricsRegistry mockRegistry = mock(MetricsRegistry.class);
+        Histogram mockExecutionLatency = mock(Histogram.class);
+
+        // Make histogram throw exception when record is called
+        doThrow(new RuntimeException("Metrics recording failed")).when(mockExecutionLatency).record(anyDouble(), any(Tags.class));
+
+        // Initialize TSDBMetrics
+        TSDBMetrics.cleanup();
+        TSDBMetrics.initialize(mockRegistry);
+
+        // Create QueryMetrics with failing histogram
+        PromMatrixResponseListener.QueryMetrics queryMetrics = new PromMatrixResponseListener.QueryMetrics(
+            mockExecutionLatency,
+            null,
+            null,
+            null,
+            null,
+            null
+        );
+
+        // Create listener
+        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
+        PromMatrixResponseListener listener = new PromMatrixResponseListener(channel, TEST_AGG_NAME, false, false, queryMetrics);
+
+        // Create search response
+        List<TimeSeries> timeSeriesList = createTimeSeriesWithLabels();
+        SearchResponse searchResponse = createSearchResponse(TEST_AGG_NAME, timeSeriesList);
+
+        // Act - should not throw exception despite metrics failure
+        listener.onResponse(searchResponse);
+
+        // Assert - response should still be sent successfully
+        assertNotNull(channel.capturedResponse());
+        assertEquals(RestStatus.OK, channel.capturedResponse().status());
+
+        // Cleanup
+        TSDBMetrics.cleanup();
+    }
+
+    /**
+     * Test that metrics correctly handle multiple shards with varying breakdown times.
+     * Validates MAX (user-perceived latency) and SUM (total work) calculations.
+     */
+    public void testMetricsRecordingWithMultipleShardsVaryingTimes() throws Exception {
+        // Setup metrics with mocks
+        MetricsRegistry mockRegistry = mock(MetricsRegistry.class);
+        Histogram mockCollectPhaseLatencyMax = mock(Histogram.class);
+        Histogram mockReducePhaseLatencyMax = mock(Histogram.class);
+        Histogram mockCollectPhaseCpuTime = mock(Histogram.class);
+        Histogram mockReducePhaseCpuTime = mock(Histogram.class);
+        Histogram mockShardLatencyMax = mock(Histogram.class);
+
+        // Initialize TSDBMetrics
+        TSDBMetrics.cleanup();
+        TSDBMetrics.initialize(mockRegistry);
+
+        // Create QueryMetrics
+        PromMatrixResponseListener.QueryMetrics queryMetrics = new PromMatrixResponseListener.QueryMetrics(
+            null,
+            mockCollectPhaseLatencyMax,
+            mockReducePhaseLatencyMax,
+            mockCollectPhaseCpuTime,
+            mockReducePhaseCpuTime,
+            mockShardLatencyMax
+        );
+
+        // Create listener with profile enabled
+        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
+        PromMatrixResponseListener listener = new PromMatrixResponseListener(channel, TEST_AGG_NAME, true, false, queryMetrics);
+
+        // Create search response with 3 shards with varying times
+        // Shard 1: collect=100ms, reduce=50ms
+        // Shard 2: collect=150ms, reduce=30ms (slowest collect)
+        // Shard 3: collect=80ms, reduce=70ms (slowest reduce)
+        SearchResponse searchResponse = createSearchResponseWithMultipleShards(
+            new long[] { 100_000_000L, 150_000_000L, 80_000_000L },  // collect times
+            new long[] { 50_000_000L, 30_000_000L, 70_000_000L }     // reduce times
+        );
+
+        // Act - trigger metrics recording via onResponse
+        listener.onResponse(searchResponse);
+
+        // Assert - verify MAX and SUM metrics
+        // Max collect should be 150ms (shard 2 - user-perceived latency)
+        verify(mockCollectPhaseLatencyMax, times(1)).record(doubleThat(value -> Math.abs(value - 150.0) < 0.001), any(Tags.class));
+
+        // Max reduce should be 70ms (shard 3 - user-perceived latency)
+        verify(mockReducePhaseLatencyMax, times(1)).record(doubleThat(value -> Math.abs(value - 70.0) < 0.001), any(Tags.class));
+
+        // Total collect CPU time should be 330ms (100 + 150 + 80)
+        verify(mockCollectPhaseCpuTime, times(1)).record(doubleThat(value -> Math.abs(value - 330.0) < 0.001), any(Tags.class));
+
+        // Total reduce CPU time should be 150ms (50 + 30 + 70)
+        verify(mockReducePhaseCpuTime, times(1)).record(doubleThat(value -> Math.abs(value - 150.0) < 0.001), any(Tags.class));
+
+        // Max shard latency should be 180ms (max of (100+50)=150ms, (150+30)=180ms, (80+70)=150ms)
+        verify(mockShardLatencyMax, times(1)).record(doubleThat(value -> Math.abs(value - 180.0) < 0.001), any(Tags.class));
+
+        // Cleanup
+        TSDBMetrics.cleanup();
+    }
+
+    // ========== Helper Methods for Metrics Tests ==========
+
+    /**
+     * Creates a SearchResponse with profile results containing TimeSeriesUnfoldAggregator breakdown times
+     * for 2 shards.
+     */
+    private SearchResponse createSearchResponseWithProfile(
+        long shard1CollectNanos,
+        long shard1ReduceNanos,
+        long shard2CollectNanos,
+        long shard2ReduceNanos
+    ) {
+        // Create profile results for each shard
+        Map<String, Long> breakdown1 = new HashMap<>();
+        breakdown1.put("collect", shard1CollectNanos);
+        breakdown1.put("reduce", shard1ReduceNanos);
+
+        Map<String, Long> breakdown2 = new HashMap<>();
+        breakdown2.put("collect", shard2CollectNanos);
+        breakdown2.put("reduce", shard2ReduceNanos);
+
+        ProfileResult profileResult1 = new ProfileResult(
+            TimeSeriesUnfoldAggregator.class.getSimpleName(),
+            "testCase",
+            breakdown1,
+            Collections.emptyMap(),
+            shard1CollectNanos + shard1ReduceNanos,
+            List.of()
+        );
+
+        ProfileResult profileResult2 = new ProfileResult(
+            TimeSeriesUnfoldAggregator.class.getSimpleName(),
+            "testCase",
+            breakdown2,
+            Collections.emptyMap(),
+            shard2CollectNanos + shard2ReduceNanos,
+            List.of()
+        );
+
+        // Create AggregationProfileShardResult for each shard
+        AggregationProfileShardResult aggProfile1 = new AggregationProfileShardResult(List.of(profileResult1));
+        AggregationProfileShardResult aggProfile2 = new AggregationProfileShardResult(List.of(profileResult2));
+
+        ProfileShardResult shardResult1 = new ProfileShardResult(List.of(), aggProfile1, null, null);
+        ProfileShardResult shardResult2 = new ProfileShardResult(List.of(), aggProfile2, null, null);
+
+        // Create profile results map
+        Map<String, ProfileShardResult> profileResults = new HashMap<>();
+        profileResults.put("shard_0", shardResult1);
+        profileResults.put("shard_1", shardResult2);
+
+        // Create mock SearchResponse with profile results
+        SearchResponse searchResponse = mock(SearchResponse.class);
+        when(searchResponse.getProfileResults()).thenReturn(profileResults);
+
+        // Also need to mock aggregations for the response processing
+        List<TimeSeries> timeSeriesList = createTimeSeriesWithLabels();
+        InternalTimeSeries timeSeries = new InternalTimeSeries(TEST_AGG_NAME, timeSeriesList, TEST_METADATA);
+        Aggregations aggregations = new Aggregations(List.of(timeSeries));
+        when(searchResponse.getAggregations()).thenReturn(aggregations);
+
+        return searchResponse;
+    }
+
+    /**
+     * Creates a SearchResponse with profile results for multiple shards with custom breakdown times.
+     */
+    private SearchResponse createSearchResponseWithMultipleShards(long[] collectNanos, long[] reduceNanos) {
+        Map<String, ProfileShardResult> profileResults = new HashMap<>();
+
+        for (int i = 0; i < collectNanos.length; i++) {
+            Map<String, Long> breakdown = new HashMap<>();
+            breakdown.put("collect", collectNanos[i]);
+            breakdown.put("reduce", reduceNanos[i]);
+
+            ProfileResult profileResult = new ProfileResult(
+                TimeSeriesUnfoldAggregator.class.getSimpleName(),
+                "testCase",
+                breakdown,
+                Collections.emptyMap(),
+                collectNanos[i] + reduceNanos[i],
+                List.of()
+            );
+
+            AggregationProfileShardResult aggProfile = new AggregationProfileShardResult(List.of(profileResult));
+
+            ProfileShardResult shardResult = new ProfileShardResult(List.of(), aggProfile, null, null);
+
+            profileResults.put("shard_" + i, shardResult);
+        }
+
+        // Create mock SearchResponse with profile results
+        SearchResponse searchResponse = mock(SearchResponse.class);
+        when(searchResponse.getProfileResults()).thenReturn(profileResults);
+
+        // Mock aggregations
+        List<TimeSeries> timeSeriesList = createTimeSeriesWithLabels();
+        InternalTimeSeries timeSeries = new InternalTimeSeries(TEST_AGG_NAME, timeSeriesList, TEST_METADATA);
+        Aggregations aggregations = new Aggregations(List.of(timeSeries));
+        when(searchResponse.getAggregations()).thenReturn(aggregations);
+
+        return searchResponse;
     }
 }

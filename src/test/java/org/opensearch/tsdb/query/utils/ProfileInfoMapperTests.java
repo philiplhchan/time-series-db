@@ -1284,7 +1284,7 @@ public class ProfileInfoMapperTests extends OpenSearchTestCase {
         breakdown.put("post_collection", 150L);
         breakdown.put("build_aggregation", 300L);
         breakdown.put("reduce", 250L);
-        return new ProfileResult(type, "testCase", breakdown, debugMap, 1000l, Collections.emptyList());
+        return new ProfileResult(type, "testCase", breakdown, debugMap, 1000l, List.of());
     }
 
     private SearchResponse createSearchResponse(List<ProfileResult> profileResults) {
@@ -1293,11 +1293,7 @@ public class ProfileInfoMapperTests extends OpenSearchTestCase {
 
         AggregationProfileShardResult aggProfileShardResult = new AggregationProfileShardResult(new ArrayList<>(profileResults));
 
-        ProfileShardResult shardResult = mock(ProfileShardResult.class);
-        when(shardResult.getAggregationProfileResults()).thenReturn(aggProfileShardResult);
-        when(shardResult.getQueryProfileResults()).thenReturn(null);
-        when(shardResult.getFetchProfileResult()).thenReturn(null);
-        when(shardResult.getNetworkTime()).thenReturn(null);
+        ProfileShardResult shardResult = new ProfileShardResult(List.of(), aggProfileShardResult, null, null);
 
         profileShardResults.put("shard_0", shardResult);
         when(response.getProfileResults()).thenReturn(profileShardResults);

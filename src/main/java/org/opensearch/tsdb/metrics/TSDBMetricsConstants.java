@@ -125,6 +125,28 @@ public final class TSDBMetricsConstants {
     public static final String AGGREGATION_SERIES_TOTAL = "tsdb.aggregation.series.total";
 
     // ============================================
+    // Query Execution Metrics (REST Action Level)
+    // ============================================
+
+    /** Histogram: Overall query execution latency (end-to-end at REST action level) */
+    public static final String ACTION_REST_QUERIES_EXECUTION_LATENCY = "tsdb.action.rest.queries.execution.latency";
+
+    /** Histogram: Collect phase latency - slowest shard (user-perceived latency) */
+    public static final String ACTION_REST_QUERIES_COLLECT_PHASE_LATENCY_MAX = "tsdb.action.rest.queries.collect_phase.latency.max";
+
+    /** Histogram: Reduce phase latency - slowest shard (user-perceived latency) */
+    public static final String ACTION_REST_QUERIES_REDUCE_PHASE_LATENCY_MAX = "tsdb.action.rest.queries.reduce_phase.latency.max";
+
+    /** Histogram: Collect phase CPU time summed across all shards */
+    public static final String ACTION_REST_QUERIES_COLLECT_PHASE_CPU_TIME_MS = "tsdb.action.rest.queries.collect_phase.cpu_time_ms";
+
+    /** Histogram: Reduce phase CPU time summed across all shards */
+    public static final String ACTION_REST_QUERIES_REDUCE_PHASE_CPU_TIME_MS = "tsdb.action.rest.queries.reduce_phase.cpu_time_ms";
+
+    /** Histogram: Maximum total shard processing time - slowest shard (collect + reduce on single shard) */
+    public static final String ACTION_REST_QUERIES_SHARD_LATENCY_MAX = "tsdb.action.rest.queries.shard.latency.max";
+
+    // ============================================
     // Search Metrics (Query Cache)
     // ============================================
 
@@ -247,6 +269,18 @@ public final class TSDBMetricsConstants {
     public static final String AGGREGATION_CHUNKS_FOR_DOC_ERRORS_TOTAL_DESC = "Total errors in chunksForDoc() operations";
     public static final String AGGREGATION_RESULTS_TOTAL_DESC = "Total queries tagged by result status (empty or hits)";
     public static final String AGGREGATION_SERIES_TOTAL_DESC = "Number of time series returned per query";
+
+    // Query Execution Metrics
+    public static final String ACTION_REST_QUERIES_EXECUTION_LATENCY_DESC =
+        "Overall query execution latency (end-to-end at REST action level)";
+    public static final String ACTION_REST_QUERIES_COLLECT_PHASE_LATENCY_MAX_DESC =
+        "Collect phase latency - slowest shard (user-perceived query latency)";
+    public static final String ACTION_REST_QUERIES_REDUCE_PHASE_LATENCY_MAX_DESC =
+        "Reduce phase latency - slowest shard (user-perceived query latency)";
+    public static final String ACTION_REST_QUERIES_COLLECT_PHASE_CPU_TIME_MS_DESC = "Collect phase CPU time summed across all shards";
+    public static final String ACTION_REST_QUERIES_REDUCE_PHASE_CPU_TIME_MS_DESC = "Reduce phase CPU time summed across all shards";
+    public static final String ACTION_REST_QUERIES_SHARD_LATENCY_MAX_DESC =
+        "Maximum total shard processing time - slowest shard (collect + reduce on single shard)";
 
     // Search Metrics
     public static final String SEARCH_WILDCARD_CACHE_HITS_TOTAL_DESC = "Total wildcard query cache hits";

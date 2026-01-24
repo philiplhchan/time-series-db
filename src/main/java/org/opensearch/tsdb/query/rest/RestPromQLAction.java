@@ -19,6 +19,7 @@ import org.opensearch.rest.BytesRestResponse;
 import org.opensearch.rest.RestRequest;
 import org.opensearch.search.builder.SearchSourceBuilder;
 import org.opensearch.telemetry.metrics.Counter;
+import org.opensearch.telemetry.metrics.Histogram;
 import org.opensearch.telemetry.metrics.MetricsRegistry;
 import org.opensearch.telemetry.metrics.tags.Tags;
 import org.opensearch.transport.client.node.NodeClient;
@@ -225,7 +226,20 @@ public class RestPromQLAction extends BaseTSDBAction {
                 tags.put("reached_step", "search");
                 return channel -> client.search(
                     searchRequest,
-                    new PromMatrixResponseListener(channel, finalAggName, params.profile, params.includeMetadata)
+                    new PromMatrixResponseListener(
+                        channel,
+                        finalAggName,
+                        params.profile,
+                        params.includeMetadata,
+                        new PromMatrixResponseListener.QueryMetrics(
+                            METRICS.executionLatency,
+                            METRICS.collectPhaseLatencyMax,
+                            METRICS.reducePhaseLatencyMax,
+                            METRICS.collectPhaseCpuTimeMs,
+                            METRICS.reducePhaseCpuTimeMs,
+                            METRICS.shardLatencyMax
+                        )
+                    )
                 );
 
             } catch (UnsupportedOperationException e) {
@@ -444,6 +458,12 @@ public class RestPromQLAction extends BaseTSDBAction {
     static class Metrics implements TSDBMetrics.MetricsInitializer {
         static final String REQUESTS_TOTAL_METRIC_NAME = "tsdb.action.rest.promql.queries.total";
         Counter requestsTotal;
+        Histogram executionLatency;
+        Histogram collectPhaseLatencyMax;
+        Histogram reducePhaseLatencyMax;
+        Histogram collectPhaseCpuTimeMs;
+        Histogram reducePhaseCpuTimeMs;
+        Histogram shardLatencyMax;
 
         @Override
         public void register(MetricsRegistry registry) {
@@ -452,11 +472,47 @@ public class RestPromQLAction extends BaseTSDBAction {
                 "total number of queries handled by the RestPromQLAction rest handler",
                 TSDBMetricsConstants.UNIT_COUNT
             );
+            executionLatency = registry.createHistogram(
+                TSDBMetricsConstants.ACTION_REST_QUERIES_EXECUTION_LATENCY,
+                TSDBMetricsConstants.ACTION_REST_QUERIES_EXECUTION_LATENCY_DESC,
+                TSDBMetricsConstants.UNIT_MILLISECONDS
+            );
+            collectPhaseLatencyMax = registry.createHistogram(
+                TSDBMetricsConstants.ACTION_REST_QUERIES_COLLECT_PHASE_LATENCY_MAX,
+                TSDBMetricsConstants.ACTION_REST_QUERIES_COLLECT_PHASE_LATENCY_MAX_DESC,
+                TSDBMetricsConstants.UNIT_MILLISECONDS
+            );
+            reducePhaseLatencyMax = registry.createHistogram(
+                TSDBMetricsConstants.ACTION_REST_QUERIES_REDUCE_PHASE_LATENCY_MAX,
+                TSDBMetricsConstants.ACTION_REST_QUERIES_REDUCE_PHASE_LATENCY_MAX_DESC,
+                TSDBMetricsConstants.UNIT_MILLISECONDS
+            );
+            collectPhaseCpuTimeMs = registry.createHistogram(
+                TSDBMetricsConstants.ACTION_REST_QUERIES_COLLECT_PHASE_CPU_TIME_MS,
+                TSDBMetricsConstants.ACTION_REST_QUERIES_COLLECT_PHASE_CPU_TIME_MS_DESC,
+                TSDBMetricsConstants.UNIT_MILLISECONDS
+            );
+            reducePhaseCpuTimeMs = registry.createHistogram(
+                TSDBMetricsConstants.ACTION_REST_QUERIES_REDUCE_PHASE_CPU_TIME_MS,
+                TSDBMetricsConstants.ACTION_REST_QUERIES_REDUCE_PHASE_CPU_TIME_MS_DESC,
+                TSDBMetricsConstants.UNIT_MILLISECONDS
+            );
+            shardLatencyMax = registry.createHistogram(
+                TSDBMetricsConstants.ACTION_REST_QUERIES_SHARD_LATENCY_MAX,
+                TSDBMetricsConstants.ACTION_REST_QUERIES_SHARD_LATENCY_MAX_DESC,
+                TSDBMetricsConstants.UNIT_MILLISECONDS
+            );
         }
 
         @Override
         public synchronized void cleanup() {
             requestsTotal = null;
+            executionLatency = null;
+            collectPhaseLatencyMax = null;
+            reducePhaseLatencyMax = null;
+            collectPhaseCpuTimeMs = null;
+            reducePhaseCpuTimeMs = null;
+            shardLatencyMax = null;
         }
     }
 }

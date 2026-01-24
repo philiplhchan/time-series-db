@@ -22,12 +22,17 @@ import org.opensearch.rest.RestHandler.Route;
 import org.opensearch.rest.RestRequest;
 import org.opensearch.search.aggregations.AggregatorFactories;
 import org.opensearch.search.builder.SearchSourceBuilder;
+import org.opensearch.telemetry.metrics.Counter;
+import org.opensearch.telemetry.metrics.Histogram;
+import org.opensearch.telemetry.metrics.MetricsRegistry;
 import org.opensearch.telemetry.metrics.tags.Tags;
 import org.opensearch.test.OpenSearchTestCase;
 import org.opensearch.test.rest.FakeRestChannel;
 import org.opensearch.test.rest.FakeRestRequest;
 import org.opensearch.transport.client.node.NodeClient;
 import org.opensearch.tsdb.TSDBPlugin;
+import org.opensearch.tsdb.metrics.TSDBMetrics;
+import org.opensearch.tsdb.metrics.TSDBMetricsConstants;
 import org.opensearch.tsdb.query.aggregator.TimeSeriesCoordinatorAggregationBuilder;
 import org.opensearch.tsdb.query.aggregator.TimeSeriesUnfoldAggregationBuilder;
 
@@ -47,6 +52,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * Unit tests for {@link RestM3QLAction}, the REST handler for M3QL query execution.
@@ -886,16 +892,16 @@ public class RestM3QLActionTests extends OpenSearchTestCase {
      */
     public void testMetricsIncrementedOnSuccessfulQuery() throws Exception {
         // Setup metrics with mocks
-        org.opensearch.telemetry.metrics.MetricsRegistry mockRegistry = mock(org.opensearch.telemetry.metrics.MetricsRegistry.class);
-        org.opensearch.telemetry.metrics.Counter mockCounter = mock(org.opensearch.telemetry.metrics.Counter.class);
+        MetricsRegistry mockRegistry = mock(MetricsRegistry.class);
+        Counter mockCounter = mock(Counter.class);
 
-        org.mockito.Mockito.when(
-            mockRegistry.createCounter(eq(RestM3QLAction.Metrics.REQUESTS_TOTAL_METRIC_NAME), anyString(), anyString())
-        ).thenReturn(mockCounter);
+        when(mockRegistry.createCounter(eq(RestM3QLAction.Metrics.REQUESTS_TOTAL_METRIC_NAME), anyString(), anyString())).thenReturn(
+            mockCounter
+        );
 
         // Initialize TSDBMetrics with M3QL metrics
-        org.opensearch.tsdb.metrics.TSDBMetrics.cleanup();
-        org.opensearch.tsdb.metrics.TSDBMetrics.initialize(mockRegistry, RestM3QLAction.getMetricsInitializer());
+        TSDBMetrics.cleanup();
+        TSDBMetrics.initialize(mockRegistry, RestM3QLAction.getMetricsInitializer());
 
         // Setup mock client
         NodeClient mockClient = setupMockClientWithAssertion(this::assertContainsTimeSeriesUnfoldAggregation);
@@ -917,7 +923,7 @@ public class RestM3QLActionTests extends OpenSearchTestCase {
         assertThat(capturedTags.getTagsMap(), equalTo(Map.of("pushdown", "true", "reached_step", "search", "explain", "false")));
 
         // Cleanup
-        org.opensearch.tsdb.metrics.TSDBMetrics.cleanup();
+        TSDBMetrics.cleanup();
     }
 
     /**
@@ -925,16 +931,16 @@ public class RestM3QLActionTests extends OpenSearchTestCase {
      */
     public void testMetricsIncrementedOnExplainQuery() throws Exception {
         // Setup metrics with mocks
-        org.opensearch.telemetry.metrics.MetricsRegistry mockRegistry = mock(org.opensearch.telemetry.metrics.MetricsRegistry.class);
-        org.opensearch.telemetry.metrics.Counter mockCounter = mock(org.opensearch.telemetry.metrics.Counter.class);
+        MetricsRegistry mockRegistry = mock(MetricsRegistry.class);
+        Counter mockCounter = mock(Counter.class);
 
-        org.mockito.Mockito.when(
-            mockRegistry.createCounter(eq(RestM3QLAction.Metrics.REQUESTS_TOTAL_METRIC_NAME), anyString(), anyString())
-        ).thenReturn(mockCounter);
+        when(mockRegistry.createCounter(eq(RestM3QLAction.Metrics.REQUESTS_TOTAL_METRIC_NAME), anyString(), anyString())).thenReturn(
+            mockCounter
+        );
 
         // Initialize TSDBMetrics with M3QL metrics
-        org.opensearch.tsdb.metrics.TSDBMetrics.cleanup();
-        org.opensearch.tsdb.metrics.TSDBMetrics.initialize(mockRegistry, RestM3QLAction.getMetricsInitializer());
+        TSDBMetrics.cleanup();
+        TSDBMetrics.initialize(mockRegistry, RestM3QLAction.getMetricsInitializer());
 
         // Execute an explain query
         FakeRestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withMethod(RestRequest.Method.GET)
@@ -951,7 +957,7 @@ public class RestM3QLActionTests extends OpenSearchTestCase {
         }));
 
         // Cleanup
-        org.opensearch.tsdb.metrics.TSDBMetrics.cleanup();
+        TSDBMetrics.cleanup();
     }
 
     /**
@@ -959,16 +965,16 @@ public class RestM3QLActionTests extends OpenSearchTestCase {
      */
     public void testMetricsIncrementedOnErrorQuery() throws Exception {
         // Setup metrics with mocks
-        org.opensearch.telemetry.metrics.MetricsRegistry mockRegistry = mock(org.opensearch.telemetry.metrics.MetricsRegistry.class);
-        org.opensearch.telemetry.metrics.Counter mockCounter = mock(org.opensearch.telemetry.metrics.Counter.class);
+        MetricsRegistry mockRegistry = mock(MetricsRegistry.class);
+        Counter mockCounter = mock(Counter.class);
 
-        org.mockito.Mockito.when(
-            mockRegistry.createCounter(eq(RestM3QLAction.Metrics.REQUESTS_TOTAL_METRIC_NAME), anyString(), anyString())
-        ).thenReturn(mockCounter);
+        when(mockRegistry.createCounter(eq(RestM3QLAction.Metrics.REQUESTS_TOTAL_METRIC_NAME), anyString(), anyString())).thenReturn(
+            mockCounter
+        );
 
         // Initialize TSDBMetrics with M3QL metrics
-        org.opensearch.tsdb.metrics.TSDBMetrics.cleanup();
-        org.opensearch.tsdb.metrics.TSDBMetrics.initialize(mockRegistry, RestM3QLAction.getMetricsInitializer());
+        TSDBMetrics.cleanup();
+        TSDBMetrics.initialize(mockRegistry, RestM3QLAction.getMetricsInitializer());
 
         // Execute a query with empty query parameter
         FakeRestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withMethod(RestRequest.Method.GET)
@@ -985,7 +991,7 @@ public class RestM3QLActionTests extends OpenSearchTestCase {
         }));
 
         // Cleanup
-        org.opensearch.tsdb.metrics.TSDBMetrics.cleanup();
+        TSDBMetrics.cleanup();
     }
 
     /**
@@ -993,16 +999,16 @@ public class RestM3QLActionTests extends OpenSearchTestCase {
      */
     public void testMetricsIncrementedOnKnownUnimplementedFunctionError() throws Exception {
         // Setup metrics with mocks
-        org.opensearch.telemetry.metrics.MetricsRegistry mockRegistry = mock(org.opensearch.telemetry.metrics.MetricsRegistry.class);
-        org.opensearch.telemetry.metrics.Counter mockCounter = mock(org.opensearch.telemetry.metrics.Counter.class);
+        MetricsRegistry mockRegistry = mock(MetricsRegistry.class);
+        Counter mockCounter = mock(Counter.class);
 
-        org.mockito.Mockito.when(
-            mockRegistry.createCounter(eq(RestM3QLAction.Metrics.REQUESTS_TOTAL_METRIC_NAME), anyString(), anyString())
-        ).thenReturn(mockCounter);
+        when(mockRegistry.createCounter(eq(RestM3QLAction.Metrics.REQUESTS_TOTAL_METRIC_NAME), anyString(), anyString())).thenReturn(
+            mockCounter
+        );
 
         // Initialize TSDBMetrics with M3QL metrics
-        org.opensearch.tsdb.metrics.TSDBMetrics.cleanup();
-        org.opensearch.tsdb.metrics.TSDBMetrics.initialize(mockRegistry, RestM3QLAction.getMetricsInitializer());
+        TSDBMetrics.cleanup();
+        TSDBMetrics.initialize(mockRegistry, RestM3QLAction.getMetricsInitializer());
 
         // Execute a query with known unimplemented function
         FakeRestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withMethod(RestRequest.Method.GET)
@@ -1023,7 +1029,93 @@ public class RestM3QLActionTests extends OpenSearchTestCase {
         }));
 
         // Cleanup
-        org.opensearch.tsdb.metrics.TSDBMetrics.cleanup();
+        TSDBMetrics.cleanup();
+    }
+
+    /**
+     * Test that RestM3QLAction.Metrics properly registers all query execution histograms.
+     */
+    public void testMetricsHistogramsRegistered() throws Exception {
+        // Setup metrics with mocks
+        MetricsRegistry mockRegistry = mock(MetricsRegistry.class);
+        Counter mockCounter = mock(Counter.class);
+        Histogram mockHistogram = mock(Histogram.class);
+
+        // Mock counter creation
+        when(mockRegistry.createCounter(eq(RestM3QLAction.Metrics.REQUESTS_TOTAL_METRIC_NAME), anyString(), anyString())).thenReturn(
+            mockCounter
+        );
+
+        // Mock histogram creations - return mock histogram for all
+        when(mockRegistry.createHistogram(anyString(), anyString(), anyString())).thenReturn(mockHistogram);
+
+        // Initialize TSDBMetrics with M3QL metrics
+        TSDBMetrics.cleanup();
+        TSDBMetrics.initialize(mockRegistry, RestM3QLAction.getMetricsInitializer());
+
+        // Verify all histograms were created
+        verify(mockRegistry).createHistogram(
+            eq(TSDBMetricsConstants.ACTION_REST_QUERIES_EXECUTION_LATENCY),
+            anyString(),
+            eq(TSDBMetricsConstants.UNIT_MILLISECONDS)
+        );
+        verify(mockRegistry).createHistogram(
+            eq(TSDBMetricsConstants.ACTION_REST_QUERIES_COLLECT_PHASE_LATENCY_MAX),
+            anyString(),
+            eq(TSDBMetricsConstants.UNIT_MILLISECONDS)
+        );
+        verify(mockRegistry).createHistogram(
+            eq(TSDBMetricsConstants.ACTION_REST_QUERIES_REDUCE_PHASE_LATENCY_MAX),
+            anyString(),
+            eq(TSDBMetricsConstants.UNIT_MILLISECONDS)
+        );
+        verify(mockRegistry).createHistogram(
+            eq(TSDBMetricsConstants.ACTION_REST_QUERIES_COLLECT_PHASE_CPU_TIME_MS),
+            anyString(),
+            eq(TSDBMetricsConstants.UNIT_MILLISECONDS)
+        );
+        verify(mockRegistry).createHistogram(
+            eq(TSDBMetricsConstants.ACTION_REST_QUERIES_REDUCE_PHASE_CPU_TIME_MS),
+            anyString(),
+            eq(TSDBMetricsConstants.UNIT_MILLISECONDS)
+        );
+        verify(mockRegistry).createHistogram(
+            eq(TSDBMetricsConstants.ACTION_REST_QUERIES_SHARD_LATENCY_MAX),
+            anyString(),
+            eq(TSDBMetricsConstants.UNIT_MILLISECONDS)
+        );
+
+        // Cleanup
+        TSDBMetrics.cleanup();
+    }
+
+    /**
+     * Test that RestM3QLAction.Metrics.cleanup() properly clears all histogram references.
+     */
+    public void testMetricsCleanup() throws Exception {
+        // Setup metrics with mocks
+        MetricsRegistry mockRegistry = mock(MetricsRegistry.class);
+        Counter mockCounter = mock(Counter.class);
+        Histogram mockHistogram = mock(Histogram.class);
+
+        // Mock counter and histogram creation
+        when(mockRegistry.createCounter(eq(RestM3QLAction.Metrics.REQUESTS_TOTAL_METRIC_NAME), anyString(), anyString())).thenReturn(
+            mockCounter
+        );
+        when(mockRegistry.createHistogram(anyString(), anyString(), anyString())).thenReturn(mockHistogram);
+
+        // Initialize TSDBMetrics with M3QL metrics
+        TSDBMetrics.cleanup();
+        TSDBMetrics.initialize(mockRegistry, RestM3QLAction.getMetricsInitializer());
+
+        // Cleanup should not throw
+        TSDBMetrics.cleanup();
+
+        // Verify cleanup was successful by re-initializing
+        TSDBMetrics.initialize(mockRegistry, RestM3QLAction.getMetricsInitializer());
+
+        // Final cleanup
+        TSDBMetrics.cleanup();
     }
 
     // ========== Cluster Settings Tests ==========
