@@ -84,7 +84,6 @@ public class Constants {
             "sustainedBelow",
             "switch",
             "tagCompare",
-            "tagSub",
             "tail",
             "topK",
             "timestamp",
@@ -123,6 +122,11 @@ public class Constants {
          * excludeByTag function name.
          */
         public static final String EXCLUDE_BY_TAG = "excludeByTag";
+
+        /**
+         * tagSub function name.
+         */
+        public static final String TAG_SUB = "tagSub";
 
         /**
          * fallbackSeries function name.

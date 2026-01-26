@@ -1,0 +1,7 @@
+# Test tagSub operation with backreferences
+# Replace "prod-" prefix with "production-" in environment tag
+fetch
+name:service.requests
+env:prod-*
+| tagSub env "^prod-(.*)$" "production-$1"
+| alias {{.env}}

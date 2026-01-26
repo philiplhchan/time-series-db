@@ -1,0 +1,13 @@
+ROOT
+  PIPELINE
+    FUNCTION(fetch)
+      TAG_KEY(name)
+        TAG_VALUE(service.requests)
+      TAG_KEY(env)
+        TAG_VALUE(prod-*)
+    FUNCTION(tagSub)
+      VALUE(env)
+      VALUE("^prod-(.*)$")
+      VALUE("production-$1")
+    FUNCTION(alias)
+      VALUE({{.env}})

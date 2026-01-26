@@ -26,6 +26,7 @@ import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.AliasPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.AsPercentPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.BinaryPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.ExcludeByTagPlanNode;
+import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.TagSubPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.FallbackSeriesBinaryPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.FallbackSeriesConstantPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.FetchPlanNode;
@@ -244,6 +245,50 @@ public class SourceBuilderVisitorTests extends OpenSearchTestCase {
 
         IllegalStateException exception = expectThrows(IllegalStateException.class, () -> visitor.visit(planNode));
         assertEquals("ExcludeByTagPlanNode must have exactly one child", exception.getMessage());
+    }
+
+    /**
+     * Test TagSubPlanNode with correct number of children (1).
+     */
+    public void testTagSubPlanNodeWithOneChild() {
+        TagSubPlanNode planNode = new TagSubPlanNode(1, "env", "^prod-(.*)$", "production-\\1");
+        planNode.addChild(createMockFetchNode(2));
+
+        // Should not throw an exception
+        assertNotNull(visitor.visit(planNode));
+    }
+
+    /**
+     * Test TagSubPlanNode with backreference replacement.
+     */
+    public void testTagSubPlanNodeWithBackreference() {
+        TagSubPlanNode planNode = new TagSubPlanNode(1, "host", "^([a-z]+-[a-z]+-[0-9]+)-.*$", "\\1");
+        planNode.addChild(createMockFetchNode(2));
+
+        // Should not throw an exception
+        assertNotNull(visitor.visit(planNode));
+    }
+
+    /**
+     * Test TagSubPlanNode with incorrect number of children (0).
+     */
+    public void testTagSubPlanNodeWithNoChildren() {
+        TagSubPlanNode planNode = new TagSubPlanNode(1, "env", "prod", "production");
+
+        IllegalStateException exception = expectThrows(IllegalStateException.class, () -> visitor.visit(planNode));
+        assertEquals("TagSubPlanNode must have exactly one child", exception.getMessage());
+    }
+
+    /**
+     * Test TagSubPlanNode with incorrect number of children (2).
+     */
+    public void testTagSubPlanNodeWithTwoChildren() {
+        TagSubPlanNode planNode = new TagSubPlanNode(1, "env", "prod", "production");
+        planNode.addChild(createMockFetchNode(2));
+        planNode.addChild(createMockFetchNode(3));
+
+        IllegalStateException exception = expectThrows(IllegalStateException.class, () -> visitor.visit(planNode));
+        assertEquals("TagSubPlanNode must have exactly one child", exception.getMessage());
     }
 
     /**
