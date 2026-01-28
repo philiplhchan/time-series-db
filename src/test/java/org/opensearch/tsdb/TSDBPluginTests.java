@@ -75,7 +75,7 @@ public class TSDBPluginTests extends OpenSearchTestCase {
         List<Setting<?>> settings = plugin.getSettings();
 
         assertNotNull("Settings list should not be null", settings);
-        assertThat("Should have 22 settings", settings, hasSize(22));
+        assertThat("Should have 24 settings", settings, hasSize(24));
 
         // Verify TSDB_ENGINE_ENABLED is present
         assertTrue("Should contain TSDB_ENGINE_ENABLED setting", settings.contains(TSDBPlugin.TSDB_ENGINE_ENABLED));
@@ -120,7 +120,6 @@ public class TSDBPluginTests extends OpenSearchTestCase {
             "Should contain TSDB_ENGINE_MAX_TRANSLOG_READERS_TO_CLOSE_PERCENTAGE setting",
             settings.contains(TSDBPlugin.TSDB_ENGINE_MAX_TRANSLOG_READERS_TO_CLOSE_PERCENTAGE)
         );
-
         assertTrue("Should contain TSDB_ENGINE_DEFAULT_STEP setting", settings.contains(TSDBPlugin.TSDB_ENGINE_DEFAULT_STEP));
         assertTrue(
             "Should contain TSDB_ENGINE_REMOTE_INDEX_SETTINGS_CACHE_TTL setting",
@@ -129,6 +128,14 @@ public class TSDBPluginTests extends OpenSearchTestCase {
         assertTrue(
             "Should contain TSDB_ENGINE_REMOTE_INDEX_SETTINGS_CACHE_MAX_SIZE setting",
             settings.contains(TSDBPlugin.TSDB_ENGINE_REMOTE_INDEX_SETTINGS_CACHE_MAX_SIZE)
+        );
+        assertTrue(
+            "Should contain TSDB_ENGINE_FORCE_MERGE_MIN_SEGMENT_COUNT setting",
+            settings.contains(TSDBPlugin.TSDB_ENGINE_FORCE_MERGE_MIN_SEGMENT_COUNT)
+        );
+        assertTrue(
+            "Should contain TSDB_ENGINE_FORCE_MERGE_MAX_SEGMENTS_AFTER_MERGE setting",
+            settings.contains(TSDBPlugin.TSDB_ENGINE_FORCE_MERGE_MAX_SEGMENTS_AFTER_MERGE)
         );
     }
 

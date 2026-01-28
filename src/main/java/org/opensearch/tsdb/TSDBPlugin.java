@@ -185,6 +185,62 @@ public class TSDBPlugin extends Plugin implements SearchPlugin, EnginePlugin, Ac
         Setting.Property.IndexScope,
         Setting.Property.Dynamic
     );
+    /* minimum number of segments required for an index to be eligible for force merge */
+    public static final Setting<Integer> TSDB_ENGINE_FORCE_MERGE_MIN_SEGMENT_COUNT = Setting.intSetting(
+        "index.tsdb_engine.compaction.force_merge.min_segment_count",
+        2,  // Default: only force merge indexes with 2+ segments
+        1,  // Minimum: at least 1 segment required
+        Setting.Property.IndexScope,
+        Setting.Property.Final
+    );
+
+    /**
+     * Setting for the target number of segments after force merge.
+     * This value must be less than or equal to min_segment_count.
+     * Lower values provide better query performance but require more merge time and temporary disk space.
+     */
+    public static final Setting<Integer> TSDB_ENGINE_FORCE_MERGE_MAX_SEGMENTS_AFTER_MERGE = new Setting<>(
+        "index.tsdb_engine.compaction.force_merge.max_segments_after_merge",
+        "1",  // Default: merge to single segment for maximum optimization
+        (s) -> {
+            int value = Integer.parseInt(s);
+            if (value < 1) {
+                throw new IllegalArgumentException("index.tsdb_engine.compaction.force_merge.max_segments_after_merge must be at least 1");
+            }
+            return value;
+        },
+        new Setting.Validator<Integer>() {
+            @Override
+            public void validate(Integer maxSegments) {
+                // Basic validation handled by parser above
+            }
+
+            @Override
+            public void validate(Integer maxSegments, Map<Setting<?>, Object> settings) {
+                Integer minSegmentCount = (Integer) settings.get(TSDB_ENGINE_FORCE_MERGE_MIN_SEGMENT_COUNT);
+                if (minSegmentCount != null && maxSegments > minSegmentCount) {
+                    throw new IllegalArgumentException(
+                        String.format(
+                            Locale.ROOT,
+                            "Invalid force merge configuration: index.tsdb_engine.compaction.force_merge.max_segments_after_merge (%d) "
+                                + "must be less than or equal to index.tsdb_engine.compaction.force_merge.min_segment_count (%d). "
+                                + "An index must have at least min_segment_count segments to be eligible for force merge, "
+                                + "and the merge will reduce it to max_segments_after_merge segments.",
+                            maxSegments,
+                            minSegmentCount
+                        )
+                    );
+                }
+            }
+
+            @Override
+            public Iterator<Setting<?>> settings() {
+                return Collections.<Setting<?>>singletonList(TSDB_ENGINE_FORCE_MERGE_MIN_SEGMENT_COUNT).iterator();
+            }
+        },
+        Setting.Property.IndexScope,
+        Setting.Property.Final
+    );
 
     /**
      * Setting for the maximum number of samples to store in a single chunk. FIXME: this will become a safety config - connect it
@@ -587,6 +643,8 @@ public class TSDBPlugin extends Plugin implements SearchPlugin, EnginePlugin, Ac
             TSDB_ENGINE_RETENTION_FREQUENCY,
             TSDB_ENGINE_COMPACTION_TYPE,
             TSDB_ENGINE_COMPACTION_FREQUENCY,
+            TSDB_ENGINE_FORCE_MERGE_MIN_SEGMENT_COUNT,
+            TSDB_ENGINE_FORCE_MERGE_MAX_SEGMENTS_AFTER_MERGE,
             TSDB_ENGINE_SAMPLES_PER_CHUNK,
             TSDB_ENGINE_CHUNK_DURATION,
             TSDB_ENGINE_BLOCK_DURATION,
