@@ -9,6 +9,8 @@ package org.opensearch.tsdb.query.aggregator;
 
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.search.ScoreMode;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.opensearch.search.aggregations.Aggregator;
 import org.opensearch.search.aggregations.AggregatorFactories;
 import org.opensearch.search.aggregations.CardinalityUpperBound;
@@ -97,6 +99,8 @@ import org.opensearch.tsdb.query.utils.ProfileInfoMapper;
  */
 public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
 
+    private static final Logger logger = LogManager.getLogger(TimeSeriesUnfoldAggregator.class);
+
     private static final Tags TAGS_STATUS_EMPTY = Tags.create()
         .addTag(TSDBMetricsConstants.TAG_STATUS, TSDBMetricsConstants.TAG_STATUS_EMPTY);
     private static final Tags TAGS_STATUS_HITS = Tags.create()
@@ -131,12 +135,56 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
     private int chunksForDocErrors = 0;
     private int outputSeriesCount = 0;
 
+    // Circuit breaker tracking
+    long circuitBreakerBytes = 0; // package-private for testing
+
+    // Estimated sizes for circuit breaker accounting
+    private static final long HASHMAP_ENTRY_OVERHEAD = 32; // Estimated overhead per HashMap entry
+    private static final long ARRAYLIST_OVERHEAD = 24; // Estimated ArrayList object overhead
+
+    /**
+     * Warning threshold for circuit breaker usage in bytes.
+     * When circuit breaker allocation exceeds this threshold, a WARN log is emitted.
+     * This value is read from the cluster setting tsdb_engine.aggregation.circuit_breaker.warn_threshold.
+     */
+    private final long circuitBreakerWarnThreshold;
+
     /**
      * Set output series count for testing purposes.
      * Package-private for testing.
      */
     void setOutputSeriesCountForTesting(int count) {
         this.outputSeriesCount = count;
+    }
+
+    /**
+     * Track memory allocation with circuit breaker.
+     * This method adds the specified bytes to the circuit breaker and tracks the total allocated.
+     * Logs warnings if allocation exceeds thresholds for observability.
+     *
+     * @param bytes the number of bytes to allocate
+     */
+    private void addCircuitBreakerBytes(long bytes) {
+        if (bytes > 0) {
+            addRequestCircuitBreakerBytes(bytes);
+            circuitBreakerBytes += bytes;
+
+            // Log at DEBUG level for normal tracking
+            if (logger.isDebugEnabled()) {
+                logger.debug("Circuit breaker allocation: +{} bytes, total={} bytes, aggregator={}", bytes, circuitBreakerBytes, name());
+            }
+
+            // Log at WARN level if total allocation exceeds threshold (potential memory issue)
+            if (circuitBreakerBytes > circuitBreakerWarnThreshold) {
+                logger.warn(
+                    "High circuit breaker usage in aggregator '{}': {} bytes ({} MB). "
+                        + "This may indicate high cardinality data or memory leak.",
+                    name(),
+                    circuitBreakerBytes,
+                    circuitBreakerBytes / (1024 * 1024)
+                );
+            }
+        }
     }
 
     /**
@@ -151,6 +199,7 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
      * @param minTimestamp The minimum timestamp for filtering
      * @param maxTimestamp The maximum timestamp for filtering
      * @param step The step size for timestamp alignment
+     * @param circuitBreakerWarnThreshold The circuit breaker warning threshold in bytes
      * @param metadata The aggregation metadata
      * @throws IOException If an error occurs during initialization
      */
@@ -164,6 +213,7 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
         long minTimestamp,
         long maxTimestamp,
         long step,
+        long circuitBreakerWarnThreshold,
         Map<String, Object> metadata
     ) throws IOException {
         super(name, factories, context, parent, bucketCardinality, metadata);
@@ -172,6 +222,7 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
         this.minTimestamp = minTimestamp;
         this.maxTimestamp = maxTimestamp;
         this.step = step;
+        this.circuitBreakerWarnThreshold = circuitBreakerWarnThreshold;
 
         // Calculate theoretical maximum aligned timestamp
         // This is the largest timestamp aligned to (minTimestamp + N * step) that is < maxTimestamp
@@ -221,6 +272,10 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
 
         @Override
         public void collect(int doc, long bucket) throws IOException {
+            // Accumulate all circuit breaker bytes for this document
+            // Single call at the end for better performance (avoid multiple atomic operations)
+            long bytesForThisDoc = 0;
+
             // Track document processing - determine if from live or closed index
             boolean isLiveReader = tsdbLeafReader instanceof LiveSeriesIndexLeafReader;
             totalDocsProcessed++;
@@ -296,6 +351,10 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
             // Align timestamps to step boundaries and deduplicate
             // Preallocate based on actual sample count
             List<Sample> alignedSamples = new ArrayList<>(allSamples.size());
+
+            // Accumulate circuit breaker bytes for aligned samples list
+            bytesForThisDoc += ARRAYLIST_OVERHEAD + (allSamples.size() * TimeSeries.ESTIMATED_SAMPLE_SIZE);
+
             long lastAlignedTimestamp = Long.MIN_VALUE;
             for (Sample sample : allSamples) {
                 // Align timestamp to minTimestamp using floor (integer division)
@@ -324,7 +383,13 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
 
             // Use the Labels equals() method for consistent label comparison across different Labels implementations.
             // The Labels class ensures that equals() returns consistent results regardless of the underlying implementation.
+            boolean isNewBucket = !timeSeriesByBucket.containsKey(bucket);
             List<TimeSeries> bucketSeries = timeSeriesByBucket.computeIfAbsent(bucket, k -> new ArrayList<>());
+
+            // Accumulate circuit breaker bytes for new bucket (if this is the first time series in this bucket)
+            if (isNewBucket) {
+                bytesForThisDoc += ARRAYLIST_OVERHEAD + HASHMAP_ENTRY_OVERHEAD;
+            }
 
             // Find existing time series with same labels, or create new one
             // TODO: Optimize label lookup for better performance
@@ -349,6 +414,12 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
                     true // assumeSorted - data points within each chunk are sorted
                 );
 
+                // Accumulate circuit breaker bytes for merged samples (new samples added)
+                int additionalSamples = mergedSamples.size() - existingSeries.getSamples().size();
+                if (additionalSamples > 0) {
+                    bytesForThisDoc += additionalSamples * TimeSeries.ESTIMATED_SAMPLE_SIZE;
+                }
+
                 // Replace the existing series with updated one (reuse existing hash and labels)
                 // Use theoreticalMaxTimestamp (calculated from query params) instead of query maxTimestamp
                 bucketSeries.set(
@@ -368,7 +439,16 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
                 // Use theoreticalMaxTimestamp (calculated from query params) instead of query maxTimestamp
                 TimeSeries newSeries = new TimeSeries(alignedSamples, labels, minTimestamp, theoreticalMaxTimestamp, step, null);
 
+                // Accumulate circuit breaker bytes for new time series
+                bytesForThisDoc += TimeSeries.ESTIMATED_MEMORY_OVERHEAD + labels.estimateBytes();
+                // Note: alignedSamples bytes already accumulated above
+
                 bucketSeries.add(newSeries);
+            }
+
+            // Track circuit breaker - single call per document for better performance
+            if (bytesForThisDoc > 0) {
+                addCircuitBreakerBytes(bytesForThisDoc);
             }
 
             // TODO: maybe we need to move this
@@ -428,6 +508,15 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
                 debugInfo.inputSeriesCount += inputTimeSeries.size();
 
                 List<TimeSeries> processedTimeSeries = executeStages(inputTimeSeries);
+
+                // Track circuit breaker for processed time series storage
+                // Estimate the size of the processed time series list
+                long processedBytes = HASHMAP_ENTRY_OVERHEAD + ARRAYLIST_OVERHEAD;
+                for (TimeSeries ts : processedTimeSeries) {
+                    processedBytes += TimeSeries.ESTIMATED_MEMORY_OVERHEAD + ts.getLabels().estimateBytes();
+                    processedBytes += ts.getSamples().size() * TimeSeries.ESTIMATED_SAMPLE_SIZE;
+                }
+                addCircuitBreakerBytes(processedBytes);
 
                 // Store the processed time series
                 processedTimeSeriesByBucket.put(bucketOrd, processedTimeSeries);
@@ -495,6 +584,18 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
 
     @Override
     public void doClose() {
+        // Log circuit breaker summary before cleanup
+        if (logger.isDebugEnabled()) {
+            logger.debug(
+                "Closing aggregator '{}': total circuit breaker bytes tracked={} ({} KB)",
+                name(),
+                circuitBreakerBytes,
+                circuitBreakerBytes / 1024
+            );
+        }
+
+        // Clear data structures - circuit breaker will be automatically released
+        // by the parent AggregatorBase class when close() is called
         processedTimeSeriesByBucket.clear();
         timeSeriesByBucket.clear();
     }
@@ -504,6 +605,7 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
         super.collectDebugInfo(add);
         debugInfo.add(add);
         add.accept("stages", stages == null ? "" : stages.stream().map(UnaryPipelineStage::getName).collect(Collectors.joining(",")));
+        add.accept("circuit_breaker_bytes", circuitBreakerBytes);
     }
 
     /**
@@ -570,6 +672,11 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
                 TSDBMetrics.recordHistogram(TSDBMetrics.AGGREGATION.seriesTotal, outputSeriesCount);
             } else {
                 TSDBMetrics.incrementCounter(TSDBMetrics.AGGREGATION.resultsTotal, 1, TAGS_STATUS_EMPTY);
+            }
+
+            // Record circuit breaker bytes
+            if (circuitBreakerBytes > 0) {
+                TSDBMetrics.recordHistogram(TSDBMetrics.AGGREGATION.circuitBreakerBytes, circuitBreakerBytes);
             }
         } catch (Exception e) {
             // Swallow exceptions in metrics recording to avoid impacting actual operation

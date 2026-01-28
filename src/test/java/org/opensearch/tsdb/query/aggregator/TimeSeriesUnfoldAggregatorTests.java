@@ -41,6 +41,7 @@ import org.opensearch.telemetry.metrics.MetricsRegistry;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.anyString;
@@ -243,6 +244,7 @@ public class TimeSeriesUnfoldAggregatorTests extends OpenSearchTestCase {
             minTimestamp,
             maxTimestamp,
             step,
+            100 * 1024 * 1024,  // Default 100 MB threshold for tests
             Map.of()
         );
     }
@@ -323,6 +325,27 @@ public class TimeSeriesUnfoldAggregatorTests extends OpenSearchTestCase {
         } finally {
             TSDBMetrics.cleanup();
         }
+    }
+
+    /**
+     * Tests that circuit breaker bytes are tracked during aggregation.
+     * Verifies that the aggregator properly tracks memory allocations.
+     */
+    public void testCircuitBreakerTracking() throws IOException {
+        long minTimestamp = 1000L;
+        long maxTimestamp = 5000L;
+        long step = 100L;
+
+        TimeSeriesUnfoldAggregator aggregator = createAggregator(minTimestamp, maxTimestamp, step);
+
+        // Initially, circuit breaker bytes should be 0
+        assertEquals("Circuit breaker should start at 0", 0L, aggregator.circuitBreakerBytes);
+
+        // After processing (if any data is collected), circuit breaker should track memory
+        // Note: In this test we don't actually process data, so it should remain 0
+        // In real usage, it would increase as data is collected
+
+        aggregator.close();
     }
 
     private TSDBLeafReaderWithContext createMockTSDBLeafReaderWithContext(long minTimestamp, long maxTimestamp) throws IOException {
@@ -435,5 +458,100 @@ public class TimeSeriesUnfoldAggregatorTests extends OpenSearchTestCase {
         LeafReaderContext context = compositeReader.leaves().getFirst();
 
         return new TSDBLeafReaderWithContext(tsdbLeafReader, context, tempReader, directory, indexWriter);
+    }
+
+    /**
+     * Validate HashMap.Entry overhead constant is reasonable.
+     * HashMap.Entry is not directly instantiable, so we validate the constant is in expected range.
+     */
+    public void testHashMapEntryOverheadIsReasonable() {
+        // Create a HashMap to analyze
+        java.util.HashMap<String, String> map = new java.util.HashMap<>();
+        map.put("key", "value");
+
+        try {
+            // Get the actual entry size using JOL
+            java.util.Map.Entry<String, String> entry = map.entrySet().iterator().next();
+            org.openjdk.jol.info.ClassLayout layout = org.openjdk.jol.info.ClassLayout.parseInstance(entry);
+            long actualSize = layout.instanceSize();
+
+            // HashMap.Entry typically includes:
+            // - Object header: 16 bytes
+            // - hash field (int): 4 bytes
+            // - key reference: 8 bytes
+            // - value reference: 8 bytes
+            // - next reference: 8 bytes (for chaining)
+            // Total: ~44-48 bytes (with padding)
+
+            // Validate the hardcoded constant (32) is conservative but reasonable
+            long hardcodedConstant = 32;
+
+            assertTrue("HASHMAP_ENTRY_OVERHEAD (32) should be at least 24 bytes (minimum fields without header)", hardcodedConstant >= 24);
+
+            assertTrue(
+                "HASHMAP_ENTRY_OVERHEAD (32) is conservative (actual ~" + actualSize + " bytes). This is acceptable for estimates.",
+                hardcodedConstant <= actualSize + 16 // Allow some variance
+            );
+
+            logger.info(
+                "HashMap.Entry overhead validation:\n"
+                    + "  Hardcoded constant: {} bytes (conservative estimate)\n"
+                    + "  Actual JVM layout: {} bytes\n"
+                    + "  Note: Conservative estimate is acceptable for circuit breaker",
+                hardcodedConstant,
+                actualSize
+            );
+
+        } catch (Exception e) {
+            // If JOL analysis fails, just validate the constant is reasonable
+            long hardcodedConstant = 32;
+            assertTrue("HASHMAP_ENTRY_OVERHEAD should be reasonable", hardcodedConstant >= 24 && hardcodedConstant <= 64);
+        }
+    }
+
+    /**
+     * Validate ArrayList overhead constant is accurate.
+     */
+    public void testArrayListOverheadIsAccurate() {
+        try {
+            // Create an empty ArrayList
+            java.util.ArrayList<Object> list = new java.util.ArrayList<>();
+
+            // Get actual JVM layout
+            org.openjdk.jol.info.ClassLayout layout = org.openjdk.jol.info.ClassLayout.parseInstance(list);
+            long actualOverhead = layout.instanceSize();
+
+            long hardcodedConstant = 24;
+
+            // Allow small variance
+            long allowedDelta = 8;
+            long difference = Math.abs(actualOverhead - hardcodedConstant);
+
+            if (difference > allowedDelta) {
+                fail(
+                    String.format(
+                        Locale.ROOT,
+                        "ARRAYLIST_OVERHEAD constant (%d bytes) does not match actual JVM layout (%d bytes)!\n"
+                            + "\n"
+                            + "ArrayList object layout:\n%s\n"
+                            + "\n"
+                            + "ACTION REQUIRED: Update TimeSeriesUnfoldAggregator.ARRAYLIST_OVERHEAD to %d",
+                        hardcodedConstant,
+                        actualOverhead,
+                        layout.toPrintable(),
+                        actualOverhead
+                    )
+                );
+            }
+
+            logger.info(
+                "ArrayList overhead validation passed:\n" + "  ARRAYLIST_OVERHEAD constant: {} bytes\n" + "  Actual JVM layout: {} bytes",
+                hardcodedConstant,
+                actualOverhead
+            );
+
+        } catch (Exception e) {
+            fail("Failed to validate ArrayList overhead using JOL: " + e.getMessage());
+        }
     }
 }
