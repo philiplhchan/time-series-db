@@ -63,6 +63,9 @@ public class TSDBAggregationMetrics {
     /** Counter for circuit breaker trips (when memory limit exceeded) */
     public Counter circuitBreakerTrips;
 
+    /** Histogram for pipeline stage execution latency */
+    public Histogram pipelineStageLatency;
+
     /**
      * Initialize aggregation metrics. Called by TSDBMetrics.initialize().
      */
@@ -147,6 +150,11 @@ public class TSDBAggregationMetrics {
             TSDBMetricsConstants.AGGREGATION_CIRCUIT_BREAKER_TRIPS_TOTAL_DESC,
             TSDBMetricsConstants.UNIT_COUNT
         );
+        pipelineStageLatency = registry.createHistogram(
+            TSDBMetricsConstants.AGGREGATION_PIPELINE_STAGE_LATENCY,
+            TSDBMetricsConstants.AGGREGATION_PIPELINE_STAGE_LATENCY_DESC,
+            TSDBMetricsConstants.UNIT_MILLISECONDS
+        );
     }
 
     /**
@@ -169,5 +177,6 @@ public class TSDBAggregationMetrics {
         seriesTotal = null;
         circuitBreakerBytes = null;
         circuitBreakerTrips = null;
+        pipelineStageLatency = null;
     }
 }

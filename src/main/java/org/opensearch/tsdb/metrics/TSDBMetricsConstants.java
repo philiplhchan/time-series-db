@@ -130,6 +130,9 @@ public final class TSDBMetricsConstants {
     /** Counter: Circuit breaker trips (when memory limit exceeded) */
     public static final String AGGREGATION_CIRCUIT_BREAKER_TRIPS_TOTAL = "tsdb.aggregation.circuit_breaker.trips.total";
 
+    /** Histogram: Latency per pipeline stage execution */
+    public static final String AGGREGATION_PIPELINE_STAGE_LATENCY = "tsdb.aggregation.pipeline_stage.latency";
+
     // ============================================
     // Query Execution Metrics (REST Action Level)
     // ============================================
@@ -278,6 +281,7 @@ public final class TSDBMetricsConstants {
     public static final String AGGREGATION_CIRCUIT_BREAKER_BYTES_DESC =
         "Circuit breaker bytes tracked per aggregation request (measures memory usage)";
     public static final String AGGREGATION_CIRCUIT_BREAKER_TRIPS_TOTAL_DESC = "Total circuit breaker trips when memory limit exceeded";
+    public static final String AGGREGATION_PIPELINE_STAGE_LATENCY_DESC = "Latency per pipeline stage execution";
 
     // Query Execution Metrics
     public static final String ACTION_REST_QUERIES_EXECUTION_LATENCY_DESC =
@@ -331,6 +335,34 @@ public final class TSDBMetricsConstants {
 
     /** Tag value for results with hits */
     public static final String TAG_STATUS_HITS = "hits";
+
+    /** Tag key for pipeline stage name */
+    public static final String TAG_STAGE_NAME = "stage_name";
+
+    /** Tag key for pipeline stage type */
+    public static final String TAG_STAGE_TYPE = "stage_type";
+
+    /** Tag value for unary stage type */
+    public static final String TAG_STAGE_TYPE_UNARY = "unary";
+
+    /** Tag value for binary stage type */
+    public static final String TAG_STAGE_TYPE_BINARY = "binary";
+
+    /** Tag key for execution location */
+    public static final String TAG_LOCATION = "location";
+
+    /** Tag value for shard-level execution */
+    public static final String TAG_LOCATION_SHARD = "shard";
+
+    /** Tag value for coordinator-level execution */
+    public static final String TAG_LOCATION_COORDINATOR = "coordinator";
+
+    // ============================================
+    // Conversion Constants
+    // ============================================
+
+    /** Conversion factor: nanoseconds per millisecond */
+    public static final double NANOS_PER_MILLI = 1_000_000.0;
 
     // ============================================
     // Metric Units

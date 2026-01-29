@@ -34,8 +34,8 @@ import org.opensearch.tsdb.core.reader.TSDBLeafReader;
 import org.opensearch.tsdb.metrics.TSDBMetrics;
 import org.opensearch.tsdb.metrics.TSDBMetricsConstants;
 import org.opensearch.tsdb.query.utils.SampleMerger;
+import org.opensearch.tsdb.query.stage.PipelineStageExecutor;
 import org.opensearch.tsdb.query.stage.UnaryPipelineStage;
-import org.opensearch.tsdb.lang.m3.stage.AbstractGroupingStage;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -543,20 +543,13 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
         List<TimeSeries> processedTimeSeries = timeSeries;
 
         if (stages != null && !stages.isEmpty()) {
-            // Process all stages except the last one normally
-            for (int i = 0; i < stages.size() - 1; i++) {
+            for (int i = 0; i < stages.size(); i++) {
                 UnaryPipelineStage stage = stages.get(i);
-                processedTimeSeries = stage.process(processedTimeSeries);
-            }
-
-            // Handle the last stage specially if it's an AbstractGroupingStage
-            UnaryPipelineStage lastStage = stages.getLast();
-            if (lastStage instanceof AbstractGroupingStage groupingStage) {
-                // Call process without materialization (isCoord=false)
-                // The materialization will happen during the reduce phase
-                processedTimeSeries = groupingStage.process(processedTimeSeries, false);
-            } else {
-                processedTimeSeries = lastStage.process(processedTimeSeries);
+                processedTimeSeries = PipelineStageExecutor.executeUnaryStage(
+                    stage,
+                    processedTimeSeries,
+                    false // shard-level execution
+                );
             }
         }
 
