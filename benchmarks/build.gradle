@@ -35,6 +35,11 @@ dependencies {
     // JMH dependencies
     implementation 'org.openjdk.jmh:jmh-core:1.37'
     annotationProcessor 'org.openjdk.jmh:jmh-generator-annprocess:1.37'
+
+    // Arrow dependencies for POC 2
+    implementation 'org.apache.arrow:arrow-vector:15.0.0'
+    implementation 'org.apache.arrow:arrow-memory-core:15.0.0'
+    runtimeOnly 'org.apache.arrow:arrow-memory-netty:15.0.0'
 }
 
 // Configure annotation processing for JMH
@@ -42,11 +47,19 @@ tasks.withType(JavaCompile) {
     options.annotationProcessorPath = configurations.annotationProcessor
 }
 
+// Configure JVM args for Arrow memory access
+tasks.withType(Test) {
+    jvmArgs '--add-opens=java.base/java.nio=ALL-UNNAMED'
+}
+
 // JMH task to run benchmarks
 tasks.register('jmh', JavaExec) {
     dependsOn classes
     mainClass = 'org.openjdk.jmh.Main'
     classpath = sourceSets.main.runtimeClasspath
+
+    // JVM args for Arrow memory access
+    jvmArgs '--add-opens=java.base/java.nio=ALL-UNNAMED'
 
     // Build JMH arguments from project properties
     def jmhArgs = []
