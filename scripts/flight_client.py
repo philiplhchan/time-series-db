@@ -62,7 +62,7 @@ def create_batch(count: int, base_time: int, labels_per_doc: int = 10) -> pa.Rec
             label_pairs.extend([f"label{j}", f"value{i}_{j}"])
 
         labels.append(label_pairs)
-        timestamps.append(base_time + i * 1000)  # 1 second apart
+        timestamps.append(base_time)
         values.append(50.0 + (i % 100) + (i * 0.01))
 
     # Create Arrow arrays
@@ -158,6 +158,8 @@ def main():
                 # Progress indicator
                 progress = total_docs / args.count * 100
                 print(f"\rProgress: {progress:.1f}% ({total_docs}/{args.count})", end='', flush=True)
+
+            base_time += 10_000 # add 10s
 
         print()  # Newline after progress
         writer.close()
