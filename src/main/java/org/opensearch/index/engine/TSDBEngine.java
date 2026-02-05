@@ -498,16 +498,17 @@ public class TSDBEngine extends Engine {
 
                     // Create appender and process the sample
                     Appender appender = head.newAppender();
+                    var seqNo = localCheckpointTracker.generateSeqNo();
                     appender.preprocess(
                         Operation.Origin.PRIMARY,
-                        localCheckpointTracker.generateSeqNo(),
+                        seqNo,
                         seriesReference,
                         labels,
                         timestamp,
                         value,
                         () -> {} // No translog for POC
                     );
-                    appender.append(() -> {}, () -> {});
+                    appender.append(() -> { localCheckpointTracker.markSeqNoAsProcessed(seqNo); }, () -> {});
 
                     successCount++;
                     TSDBMetrics.incrementCounter(TSDBMetrics.ENGINE.samplesIngested, 1, head.getMetricTags());

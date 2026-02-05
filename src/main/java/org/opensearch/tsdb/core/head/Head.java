@@ -7,6 +7,7 @@
  */
 package org.opensearch.tsdb.core.head;
 
+import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.ExceptionsHelper;
 import org.opensearch.common.logging.Loggers;
@@ -720,6 +721,7 @@ public class Head implements Closeable {
      * Appender implementation for the head storage layer.
      */
     public static class HeadAppender implements Appender {
+        private static final Logger logger = LogManager.getLogger(HeadAppender.class);
 
         private final Head head; // the head storage instance
         private MemSeries series; // the series being appended to
@@ -885,6 +887,13 @@ public class Head implements Closeable {
                     }
 
                     series.append(seqNo, sample.getTimestamp(), sample.getValue(), context.options());
+                    logger.info(
+                        "sample appended: {}, {}, {}, {}",
+                        series.getReference(),
+                        series.getLabels().toKeyValueString(),
+                        sample.getTimestamp(),
+                        sample.getValue()
+                    );
                     return true;
                 } finally {
                     series.unlock();
