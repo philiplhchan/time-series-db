@@ -170,7 +170,16 @@ configurations {
     all {
         resolutionStrategy {
             force 'org.yaml:snakeyaml:2.5'
+            // Force Arrow 18.1.0 to avoid version conflicts
+            force 'org.apache.arrow:arrow-vector:18.1.0'
+            force 'org.apache.arrow:arrow-memory-core:18.1.0'
+            force 'org.apache.arrow:arrow-memory-netty:18.1.0'
+            force 'org.apache.arrow:arrow-memory-netty-buffer-patch:18.1.0'
+            force 'org.apache.arrow:arrow-format:18.1.0'
         }
+        // Exclude arrow-memory-unsafe to avoid conflict with arrow-memory-netty
+        // Both provide DefaultAllocationManagerFactory
+        exclude group: 'org.apache.arrow', module: 'arrow-memory-unsafe'
     }
 }
 
@@ -260,6 +269,8 @@ javadoc {
 
 def numNodes = findProperty('numNodes') as Integer ?: 1
 def numZones = findProperty('numZones') as Integer ?: 1
+def flightEnabled = findProperty('flightEnabled') ?: 'false'
+def flightPort = findProperty('flightPort') as Integer ?: 9400
 
 testClusters.integTest {
     testDistribution = "ARCHIVE"
@@ -267,6 +278,24 @@ testClusters.integTest {
     // Enable feature flags for telemetryPlugin
 //    systemProperty 'opensearch.experimental.feature.telemetry.enabled', 'true'
 //    setting 'telemetry.feature.metrics.enabled', 'true'
+
+    // Arrow Flight settings
+    setting 'tsdb.flight.enabled', flightEnabled
+    setting 'tsdb.flight.port', flightPort.toString()
+
+    // Enable the aux transport when Flight is enabled
+    if (flightEnabled == 'true') {
+        setting 'aux.transport.types', 'tsdb-arrow-flight'
+    }
+
+    // JVM args for Arrow memory access (required for Arrow Flight)
+    jvmArgs '--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED'
+
+    // Netty settings for Arrow Flight (matching OS core arrow-flight-rpc plugin)
+    systemProperty 'io.netty.allocator.numDirectArenas', '1'
+    systemProperty 'io.netty.noUnsafe', 'false'
+    systemProperty 'io.netty.tryUnsafe', 'true'
+    systemProperty 'io.netty.tryReflectionSetAccessible', 'true'
 
     if (numZones > 1) numberOfZones = numZones
     if (numNodes > 1) numberOfNodes = numNodes
@@ -288,6 +317,15 @@ testClusters.javaRestTest {
 
 run {
     useCluster testClusters.integTest
+}
+
+// JVM args and system properties for Arrow (matching OS core arrow-flight-rpc plugin)
+tasks.withType(Test).configureEach {
+    jvmArgs '--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED'
+    systemProperty 'io.netty.allocator.numDirectArenas', '1'
+    systemProperty 'io.netty.noUnsafe', 'false'
+    systemProperty 'io.netty.tryUnsafe', 'true'
+    systemProperty 'io.netty.tryReflectionSetAccessible', 'true'
 }
 
 jacocoTestReport {
@@ -341,10 +379,65 @@ dependencies {
     implementation "${opensearch_group}.plugin:store-subdirectory:${opensearch_version}"
     implementation 'com.google.re2j:re2j:1.7'
 
-    // Arrow dependencies for POC 2 (bulk decoding optimization)
-    implementation 'org.apache.arrow:arrow-vector:15.0.0'
-    implementation 'org.apache.arrow:arrow-memory-core:15.0.0'
-    runtimeOnly 'org.apache.arrow:arrow-memory-netty:15.0.0'
+    // Arrow Flight dependencies for Flight server POC
+    // Versions aligned with OpenSearch 3.5.0: arrow=18.1.0, netty=4.2.9.Final, grpc=1.75.0
+    def arrowVersion = '18.1.0'
+    def nettyVersion = '4.2.9.Final'
+    def grpcVersion = '1.75.0'
+
+    // Arrow memory with Netty allocator (matching OS core arrow-flight-rpc plugin)
+    implementation "org.apache.arrow:arrow-memory-netty:${arrowVersion}"
+    implementation "org.apache.arrow:arrow-memory-core:${arrowVersion}"
+    implementation "org.apache.arrow:arrow-memory-netty-buffer-patch:${arrowVersion}"
+    implementation "org.apache.arrow:arrow-vector:${arrowVersion}"
+    implementation "org.apache.arrow:arrow-format:${arrowVersion}"
+    implementation "org.apache.arrow:flight-core:${arrowVersion}"
+    implementation 'com.google.flatbuffers:flatbuffers-java:2.0.0'
+
+    // Jackson (required by Arrow)
+    implementation 'com.fasterxml.jackson.core:jackson-core:2.20.1'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.20.1'
+    implementation 'com.fasterxml.jackson.core:jackson-annotations:2.20'
+    implementation 'commons-codec:commons-codec:1.16.1'
+
+    // gRPC dependencies (required by Arrow Flight)
+    implementation "io.grpc:grpc-api:${grpcVersion}"
+    implementation "io.grpc:grpc-stub:${grpcVersion}"
+    implementation "io.grpc:grpc-netty:${grpcVersion}"
+    runtimeOnly "io.grpc:grpc-core:${grpcVersion}"
+    runtimeOnly "io.grpc:grpc-protobuf-lite:${grpcVersion}"
+    runtimeOnly "io.grpc:grpc-protobuf:${grpcVersion}"
+    runtimeOnly 'com.google.code.findbugs:jsr305:3.0.2'
+
+    // Guava (required by gRPC)
+    runtimeOnly 'com.google.guava:failureaccess:1.0.1'
+    runtimeOnly('com.google.guava:guava:33.3.1-jre') {
+        attributes {
+            attribute(Attribute.of('org.gradle.jvm.environment', String), 'standard-jvm')
+        }
+    }
+
+    // Perfmark (required by gRPC at runtime)
+    runtimeOnly 'io.perfmark:perfmark-api:0.27.0'
+
+    // Netty dependencies (matching OS core arrow-flight-rpc plugin)
+    implementation "io.netty:netty-buffer:${nettyVersion}"
+    implementation "io.netty:netty-common:${nettyVersion}"
+    implementation "io.netty:netty-codec-base:${nettyVersion}"
+    implementation "io.netty:netty-codec-compression:${nettyVersion}"
+    implementation "io.netty:netty-codec:${nettyVersion}"
+    implementation "io.netty:netty-codec-http:${nettyVersion}"
+    implementation "io.netty:netty-codec-http2:${nettyVersion}"
+    implementation "io.netty:netty-handler:${nettyVersion}"
+    implementation "io.netty:netty-resolver:${nettyVersion}"
+    implementation "io.netty:netty-transport:${nettyVersion}"
+    implementation "io.netty:netty-transport-native-unix-common:${nettyVersion}"
+    implementation "io.netty:netty-transport-classes-epoll:${nettyVersion}"
+    implementation "io.netty:netty-tcnative-classes:2.0.66.Final"
+
+    // SLF4J API and Log4j2 bridge (required by Arrow)
+    implementation 'org.slf4j:slf4j-api:2.0.9'
+    runtimeOnly 'org.apache.logging.log4j:log4j-slf4j2-impl:2.21.1'
 
     // JOL (Java Object Layout) for memory layout testing
     testImplementation 'org.openjdk.jol:jol-core:0.17'

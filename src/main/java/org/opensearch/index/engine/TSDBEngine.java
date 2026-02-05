@@ -7,6 +7,11 @@
  */
 package org.opensearch.index.engine;
 
+import org.apache.arrow.vector.BigIntVector;
+import org.apache.arrow.vector.Float8Vector;
+import org.apache.arrow.vector.VarCharVector;
+import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.complex.ListVector;
 import org.apache.lucene.index.IndexCommit;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
@@ -56,9 +61,12 @@ import org.opensearch.tsdb.core.head.Head;
 import org.opensearch.tsdb.core.index.closed.ClosedChunkIndexManager;
 import org.opensearch.tsdb.core.index.live.LiveSeriesIndex;
 import org.opensearch.tsdb.core.mapping.Constants;
+import org.opensearch.tsdb.core.model.ByteLabels;
+import org.opensearch.tsdb.core.model.Labels;
 import org.opensearch.tsdb.core.reader.TSDBDirectoryReaderReferenceManager;
 import org.opensearch.tsdb.core.retention.RetentionFactory;
 import org.opensearch.tsdb.core.utils.RateLimitedLock;
+import org.opensearch.tsdb.flight.TSDBEngineRegistry;
 import org.opensearch.tsdb.metrics.TSDBMetrics;
 import org.opensearch.tsdb.TSDBPlugin;
 
@@ -247,6 +255,8 @@ public class TSDBEngine extends Engine {
             this.mappedChunksManager = new MMappedChunksManager(head.getMemSeriesReader());
             this.tsdbReaderManager = getTSDBReaderManager();
 
+            // Register with TSDBEngineRegistry for Arrow Flight access
+            TSDBEngineRegistry.getInstance().register(shardId.getIndexName(), this);
             success = true;
         } finally {
             if (success == false) {
@@ -455,6 +465,77 @@ public class TSDBEngine extends Engine {
             TSDBMetrics.incrementCounter(TSDBMetrics.ENGINE.samplesIngested, 1, head.getMetricTags());
             return successResult;
         }
+    }
+
+    /**
+     * Indexes a batch of documents from Arrow vectors.
+     * This method bypasses JSON/SMILE parsing for maximum performance.
+     * POC: No translog integration, direct memory indexing only.
+     *
+     * @param root VectorSchemaRoot containing labels, timestamps, and values
+     * @return number of successfully indexed documents
+     */
+    public int indexArrowBatch(VectorSchemaRoot root) {
+        ListVector labelsVector = (ListVector) root.getVector("labels");
+        BigIntVector timestampVector = (BigIntVector) root.getVector("timestamp");
+        Float8Vector valueVector = (Float8Vector) root.getVector("value");
+
+        int rowCount = root.getRowCount();
+        int successCount = 0;
+
+        try (ReleasableLock ignored = readLock.acquire()) {
+            for (int i = 0; i < rowCount; i++) {
+                try {
+                    // Extract labels from ListVector
+                    Labels labels = extractLabelsFromArrow(labelsVector, i);
+                    long timestamp = timestampVector.get(i);
+                    double value = valueVector.get(i);
+
+                    // Generate series reference as stable hash of labels
+                    long seriesReference = labels.stableHash();
+
+                    // Create appender and process the sample
+                    Appender appender = head.newAppender();
+                    appender.preprocess(
+                        Operation.Origin.PRIMARY,
+                        localCheckpointTracker.generateSeqNo(),
+                        seriesReference,
+                        labels,
+                        timestamp,
+                        value,
+                        () -> {} // No translog for POC
+                    );
+                    appender.append(() -> {}, () -> {});
+
+                    successCount++;
+                    TSDBMetrics.incrementCounter(TSDBMetrics.ENGINE.samplesIngested, 1, head.getMetricTags());
+                } catch (Exception e) {
+                    logger.warn("Failed to index Arrow row {}: {}", i, e.getMessage());
+                }
+            }
+        }
+
+        return successCount;
+    }
+
+    /**
+     * Extracts Labels from an Arrow ListVector containing pre-split key-value pairs.
+     * The ListVector contains alternating keys and values: ["key1", "val1", "key2", "val2", ...]
+     *
+     * @param labelsVector the ListVector containing label KV pairs
+     * @param index the row index
+     * @return the Labels object
+     */
+    private Labels extractLabelsFromArrow(ListVector labelsVector, int index) {
+        int start = labelsVector.getElementStartIndex(index);
+        int end = labelsVector.getElementEndIndex(index);
+        VarCharVector dataVector = (VarCharVector) labelsVector.getDataVector();
+
+        String[] kvPairs = new String[end - start];
+        for (int j = 0; j < kvPairs.length; j++) {
+            kvPairs[j] = new String(dataVector.get(start + j), java.nio.charset.StandardCharsets.UTF_8);
+        }
+        return ByteLabels.fromStrings(kvPairs);
     }
 
     /**
@@ -1304,6 +1385,9 @@ public class TSDBEngine extends Engine {
     @Override
     protected void closeNoLock(String reason, CountDownLatch closedLatch) {
         if (isClosed.compareAndSet(false, true)) {
+            // Unregister from TSDBEngineRegistry
+            TSDBEngineRegistry.getInstance().unregister(shardId.getIndexName());
+
             try {
                 if (head != null) {
                     head.close();

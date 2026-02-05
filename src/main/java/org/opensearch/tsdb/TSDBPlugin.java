@@ -19,6 +19,7 @@ import org.opensearch.common.settings.IndexScopedSettings;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.settings.SettingsFilter;
+import org.opensearch.common.network.NetworkService;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.core.common.io.stream.NamedWriteableRegistry;
 import org.opensearch.core.xcontent.NamedXContentRegistry;
@@ -33,9 +34,11 @@ import org.opensearch.index.engine.EngineFactory;
 import org.opensearch.index.engine.TSDBEngineFactory;
 import org.opensearch.index.shard.ShardPath;
 import org.opensearch.index.store.Store;
+import org.opensearch.core.indices.breaker.CircuitBreakerService;
 import org.opensearch.plugins.ActionPlugin;
 import org.opensearch.plugins.EnginePlugin;
 import org.opensearch.plugins.IndexStorePlugin;
+import org.opensearch.plugins.NetworkPlugin;
 import org.opensearch.plugins.Plugin;
 import org.opensearch.plugins.SearchPlugin;
 import org.opensearch.plugins.TelemetryAwarePlugin;
@@ -50,6 +53,9 @@ import org.opensearch.telemetry.tracing.Tracer;
 import org.opensearch.threadpool.ExecutorBuilder;
 import org.opensearch.threadpool.FixedExecutorBuilder;
 import org.opensearch.threadpool.ThreadPool;
+import org.opensearch.transport.AuxTransport;
+import org.opensearch.tsdb.flight.TSDBFlightService;
+import org.opensearch.tsdb.flight.TSDBFlightSettings;
 import org.opensearch.tsdb.lang.m3.M3QLMetrics;
 import org.opensearch.tsdb.metrics.TSDBMetrics;
 import org.opensearch.tsdb.query.fetch.LabelsFetchBuilder;
@@ -87,7 +93,14 @@ import java.util.function.Supplier;
  *   <li>Custom store implementation</li>
  * </ul>
  */
-public class TSDBPlugin extends Plugin implements SearchPlugin, EnginePlugin, ActionPlugin, IndexStorePlugin, TelemetryAwarePlugin {
+public class TSDBPlugin extends Plugin
+    implements
+        SearchPlugin,
+        EnginePlugin,
+        ActionPlugin,
+        IndexStorePlugin,
+        TelemetryAwarePlugin,
+        NetworkPlugin {
 
     private static final Logger logger = LogManager.getLogger(TSDBPlugin.class);
 
@@ -108,6 +121,9 @@ public class TSDBPlugin extends Plugin implements SearchPlugin, EnginePlugin, Ac
 
     // Singleton cache for remote index settings
     private volatile RemoteIndexSettingsCache remoteIndexSettingsCache;
+
+    // Arrow Flight service for high-performance bulk ingestion
+    private volatile TSDBFlightService flightService;
 
     /**
      * This setting identifies if the tsdb engine is enabled for the index.
@@ -618,31 +634,36 @@ public class TSDBPlugin extends Plugin implements SearchPlugin, EnginePlugin, Ac
 
     @Override
     public List<Setting<?>> getSettings() {
-        return List.of(
-            TSDB_ENGINE_ENABLED,
-            TSDB_ENGINE_RETENTION_TIME,
-            TSDB_ENGINE_RETENTION_FREQUENCY,
-            TSDB_ENGINE_COMPACTION_TYPE,
-            TSDB_ENGINE_COMPACTION_FREQUENCY,
-            TSDB_ENGINE_FORCE_MERGE_MIN_SEGMENT_COUNT,
-            TSDB_ENGINE_FORCE_MERGE_MAX_SEGMENTS_AFTER_MERGE,
-            TSDB_ENGINE_SAMPLES_PER_CHUNK,
-            TSDB_ENGINE_CHUNK_DURATION,
-            TSDB_ENGINE_BLOCK_DURATION,
-            TSDB_ENGINE_TIME_UNIT,
-            TSDB_ENGINE_OOO_CUTOFF,
-            TSDB_ENGINE_LABEL_STORAGE_TYPE,
-            TSDB_ENGINE_COMMIT_INTERVAL,
-            TSDB_ENGINE_MAX_CLOSEABLE_CHUNKS_PER_CHUNK_RANGE_PERCENTAGE,
-            TSDB_ENGINE_MAX_TRANSLOG_READERS_TO_CLOSE_PERCENTAGE,
-            TSDB_ENGINE_WILDCARD_QUERY_CACHE_MAX_SIZE,
-            TSDB_ENGINE_WILDCARD_QUERY_CACHE_EXPIRE_AFTER,
-            TSDB_ENGINE_FORCE_NO_PUSHDOWN,
-            TSDB_ENGINE_ENABLE_INTERNAL_AGG_CHUNK_COMPRESSION,
-            TSDB_ENGINE_DEFAULT_STEP,
-            TSDB_ENGINE_REMOTE_INDEX_SETTINGS_CACHE_TTL,
-            TSDB_ENGINE_REMOTE_INDEX_SETTINGS_CACHE_MAX_SIZE
+        List<Setting<?>> settings = new ArrayList<>(
+            List.of(
+                TSDB_ENGINE_ENABLED,
+                TSDB_ENGINE_RETENTION_TIME,
+                TSDB_ENGINE_RETENTION_FREQUENCY,
+                TSDB_ENGINE_COMPACTION_TYPE,
+                TSDB_ENGINE_COMPACTION_FREQUENCY,
+                TSDB_ENGINE_FORCE_MERGE_MIN_SEGMENT_COUNT,
+                TSDB_ENGINE_FORCE_MERGE_MAX_SEGMENTS_AFTER_MERGE,
+                TSDB_ENGINE_SAMPLES_PER_CHUNK,
+                TSDB_ENGINE_CHUNK_DURATION,
+                TSDB_ENGINE_BLOCK_DURATION,
+                TSDB_ENGINE_TIME_UNIT,
+                TSDB_ENGINE_OOO_CUTOFF,
+                TSDB_ENGINE_LABEL_STORAGE_TYPE,
+                TSDB_ENGINE_COMMIT_INTERVAL,
+                TSDB_ENGINE_MAX_CLOSEABLE_CHUNKS_PER_CHUNK_RANGE_PERCENTAGE,
+                TSDB_ENGINE_MAX_TRANSLOG_READERS_TO_CLOSE_PERCENTAGE,
+                TSDB_ENGINE_WILDCARD_QUERY_CACHE_MAX_SIZE,
+                TSDB_ENGINE_WILDCARD_QUERY_CACHE_EXPIRE_AFTER,
+                TSDB_ENGINE_FORCE_NO_PUSHDOWN,
+                TSDB_ENGINE_ENABLE_INTERNAL_AGG_CHUNK_COMPRESSION,
+                TSDB_ENGINE_DEFAULT_STEP,
+                TSDB_ENGINE_REMOTE_INDEX_SETTINGS_CACHE_TTL,
+                TSDB_ENGINE_REMOTE_INDEX_SETTINGS_CACHE_MAX_SIZE
+            )
         );
+        // Add Flight settings
+        settings.addAll(TSDBFlightSettings.getSettings());
+        return settings;
     }
 
     @Override
@@ -739,6 +760,25 @@ public class TSDBPlugin extends Plugin implements SearchPlugin, EnginePlugin, Ac
             new RestM3QLAction(clusterSettings, clusterService, indexNameExpressionResolver, remoteIndexSettingsCache),
             new RestPromQLAction(clusterSettings)
         );
+    }
+
+    @Override
+    public Map<String, Supplier<AuxTransport>> getAuxTransports(
+        Settings settings,
+        ThreadPool threadPool,
+        CircuitBreakerService circuitBreakerService,
+        NetworkService networkService,
+        ClusterSettings clusterSettings,
+        Tracer tracer
+    ) {
+        if (TSDBFlightSettings.TSDB_FLIGHT_ENABLED.get(settings)) {
+            flightService = new TSDBFlightService(settings);
+            logger.info("TSDB Flight service enabled, registering auxiliary transport");
+            return Collections.singletonMap(flightService.settingKey(), () -> flightService);
+        } else {
+            logger.info("TSDB Flight service disabled");
+            return Collections.emptyMap();
+        }
     }
 
     @Override
