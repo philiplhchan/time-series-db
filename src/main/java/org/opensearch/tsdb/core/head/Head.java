@@ -887,13 +887,13 @@ public class Head implements Closeable {
                     }
 
                     series.append(seqNo, sample.getTimestamp(), sample.getValue(), context.options());
-                    logger.info(
-                        "sample appended: {}, {}, {}, {}",
-                        series.getReference(),
-                        series.getLabels().toKeyValueString(),
-                        sample.getTimestamp(),
-                        sample.getValue()
-                    );
+                    // logger.info(
+                    // "sample appended: {}, {}, {}, {}",
+                    // series.getReference(),
+                    // series.getLabels().toKeyValueString(),
+                    // sample.getTimestamp(),
+                    // sample.getValue()
+                    // );
                     return true;
                 } finally {
                     series.unlock();
