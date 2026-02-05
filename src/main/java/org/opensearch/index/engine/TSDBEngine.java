@@ -494,6 +494,8 @@ public class TSDBEngine extends Engine {
                     // Generate series reference as stable hash of labels
                     long seriesReference = labels.stableHash();
 
+                    logger.info("appending doc: {}, {}, {}", labels.toKeyValueString(), timestamp, value);
+
                     // Create appender and process the sample
                     Appender appender = head.newAppender();
                     appender.preprocess(
