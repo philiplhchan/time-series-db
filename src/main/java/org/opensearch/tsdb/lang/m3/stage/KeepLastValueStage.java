@@ -260,4 +260,37 @@ public class KeepLastValueStage implements UnaryPipelineStage {
     public int hashCode() {
         return Objects.hash(lookBackWindow);
     }
+
+    /**
+     * Estimate temporary memory overhead for keep last value operations.
+     * KeepLastValueStage can expand sparse series to dense series.
+     *
+     * @param input The input time series
+     * @return Estimated temporary memory overhead in bytes
+     */
+    @Override
+    public long estimateMemoryOverhead(List<TimeSeries> input) {
+        if (input == null || input.isEmpty()) {
+            return 0;
+        }
+
+        long totalOverhead = 0;
+        for (TimeSeries ts : input) {
+            // Estimate potential expansion: (maxTimestamp - minTimestamp) / step + 1
+            long minTs = ts.getMinTimestamp();
+            long maxTs = ts.getMaxTimestamp();
+            long step = ts.getStep();
+
+            if (step > 0 && maxTs >= minTs) {
+                int potentialSamples = (int) ((maxTs - minTs) / step) + 1;
+                int currentSamples = ts.getSamples().size();
+
+                // Only track expansion (new samples beyond current)
+                int expansion = Math.max(0, potentialSamples - currentSamples);
+                totalOverhead += SampleList.ARRAYLIST_OVERHEAD + (expansion * TimeSeries.ESTIMATED_SAMPLE_SIZE);
+            }
+        }
+
+        return totalOverhead;
+    }
 }

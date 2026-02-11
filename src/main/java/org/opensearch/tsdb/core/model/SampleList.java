@@ -7,6 +7,9 @@
  */
 package org.opensearch.tsdb.core.model;
 
+import org.apache.lucene.util.Accountable;
+import org.apache.lucene.util.RamUsageEstimator;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -15,9 +18,31 @@ import java.util.List;
 
 /**
  * Customized list representation of samples, this interface tries to promote usage of raw values and timestamps
- * instead of a {@link Sample} object due to Java's object overhead
+ * instead of a {@link Sample} object due to Java's object overhead.
+ *
+ * <p>Extends {@link Accountable} to provide memory usage tracking compatible with OpenSearch/Lucene patterns.</p>
  */
-public interface SampleList extends Iterable<Sample> {
+public interface SampleList extends Iterable<Sample>, Accountable {
+
+    /** Bytes per object reference (4 with compressed OOPs, 8 without). */
+    int REFERENCE_SIZE = RamUsageEstimator.NUM_BYTES_OBJECT_REF;
+
+    /** Bytes for array header including alignment. */
+    int ARRAY_HEADER_SIZE = RamUsageEstimator.NUM_BYTES_ARRAY_HEADER;
+
+    /** Shallow size of an ArrayList instance. */
+    long ARRAYLIST_OVERHEAD = RamUsageEstimator.shallowSizeOfInstance(java.util.ArrayList.class);
+
+    /**
+     * Estimated size per Sample object in bytes.
+     * With scalar replacement (common in hot paths): 16 bytes (8-byte timestamp + 8-byte value)
+     * Without scalar replacement: ~32 bytes (includes object header)
+     * Conservative estimate assuming scalar replacement.
+     *
+     * TODO: Different Sample implementations have different sizes (e.g., SortedValuesSample has an ArrayList,
+     * SumCountSample has extra fields). Consider a more accurate per-type estimation in the future.
+     */
+    long ESTIMATED_SAMPLE_SIZE = 16;
 
     /**
      * Get the size of this list, should be a fast operation unless specifically noticed
@@ -127,10 +152,16 @@ public interface SampleList extends Iterable<Sample> {
     }
 
     final class ListWrapper implements SampleList {
+        /** Shallow size of a ListWrapper instance. */
+        private static final long SHALLOW_SIZE = RamUsageEstimator.shallowSizeOfInstance(ListWrapper.class);
+
         private final List<Sample> inner;
+        private final long estimatedBytes;
 
         private ListWrapper(List<Sample> inner) {
             this.inner = inner;
+            this.estimatedBytes = SHALLOW_SIZE + ARRAYLIST_OVERHEAD + ARRAY_HEADER_SIZE + (inner.size() * (REFERENCE_SIZE
+                + ESTIMATED_SAMPLE_SIZE));
         }
 
         @Override
@@ -195,6 +226,11 @@ public interface SampleList extends Iterable<Sample> {
         @Override
         public String toString() {
             return inner.toString();
+        }
+
+        @Override
+        public long ramBytesUsed() {
+            return estimatedBytes;  // O(1) - pre-computed at construction
         }
     }
 

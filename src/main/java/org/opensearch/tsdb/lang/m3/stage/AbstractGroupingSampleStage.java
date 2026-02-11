@@ -57,7 +57,7 @@ public abstract class AbstractGroupingSampleStage<A> extends AbstractGroupingSta
 
     @Override
     public List<TimeSeries> process(List<TimeSeries> input) {
-        return process(input, true);
+        return processWithContext(input, true, null);
     }
 
     /**

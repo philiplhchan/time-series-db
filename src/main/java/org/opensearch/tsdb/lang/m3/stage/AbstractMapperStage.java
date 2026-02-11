@@ -166,6 +166,21 @@ public abstract class AbstractMapperStage implements UnaryPipelineStage {
         return false;
     }
 
+    /**
+     * Estimate memory overhead for mapper stage operations.
+     * Mapper stages allocate new TimeSeries objects with new samples (same cardinality as input).
+     *
+     * <p>Delegates to {@link TimeSeries#ramBytesUsed()} for per-series estimation, ensuring
+     * the calculation stays accurate as underlying implementations change.</p>
+     *
+     * @param input The input time series
+     * @return Estimated memory overhead in bytes
+     */
+    @Override
+    public long estimateMemoryOverhead(List<TimeSeries> input) {
+        return UnaryPipelineStage.estimateDeepCopyOverhead(input);
+    }
+
     @Override
     public int hashCode() {
         return getClass().hashCode();

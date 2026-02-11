@@ -26,6 +26,8 @@ import org.opensearch.tsdb.query.aggregator.TimeSeries;
 import org.opensearch.tsdb.query.stage.PipelineStageAnnotation;
 import org.opensearch.tsdb.query.stage.UnaryPipelineStage;
 
+import org.apache.lucene.util.RamUsageEstimator;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -43,6 +45,12 @@ import java.util.Objects;
 public class MovingStage implements UnaryPipelineStage {
     /** The name of this stage. */
     public static final String NAME = "moving";
+
+    /**
+     * Estimated overhead per TreeMap entry in bytes.
+     * TreeMap.Entry contains: key ref, value ref, left/right/parent refs, color boolean.
+     */
+    private static final long TREEMAP_ENTRY_OVERHEAD = 40;
     private final long interval;
     private final WindowAggregationType function;
 
@@ -207,5 +215,45 @@ public class MovingStage implements UnaryPipelineStage {
     @Override
     public int hashCode() {
         return Objects.hash(interval, function);
+    }
+
+    /**
+     * Estimate temporary memory overhead for moving window operations.
+     * MovingStage uses circular buffers and TreeMap for median calculations.
+     *
+     * <p>For result samples, delegates to {@link SampleList#ramBytesUsed()} ensuring
+     * the calculation stays accurate as underlying implementations change.</p>
+     *
+     * @param input The input time series
+     * @return Estimated temporary memory overhead in bytes
+     */
+    @Override
+    public long estimateMemoryOverhead(List<TimeSeries> input) {
+        if (input == null || input.isEmpty()) {
+            return 0;
+        }
+
+        // Estimate window size based on interval and actual step size
+        int estimatedWindowSize = 50; // Conservative default
+        TimeSeries first = input.get(0);
+        if (first.getStep() > 0) {
+            estimatedWindowSize = Math.max(1, (int) (interval / first.getStep()));
+        }
+
+        long totalOverhead = 0;
+        for (TimeSeries ts : input) {
+            // Circular buffer for window values (stage-specific)
+            totalOverhead += RamUsageEstimator.NUM_BYTES_ARRAY_HEADER + (estimatedWindowSize * Double.BYTES);
+
+            // TreeMap overhead only for MEDIAN (RunningMedian uses TreeMap)
+            if (function.getType() == WindowAggregationType.Type.MEDIAN) {
+                totalOverhead += estimatedWindowSize * TREEMAP_ENTRY_OVERHEAD;
+            }
+
+            // New TimeSeries with result samples (delegated estimation)
+            totalOverhead += TimeSeries.ESTIMATED_MEMORY_OVERHEAD + ts.getSamples().ramBytesUsed();
+        }
+
+        return totalOverhead;
     }
 }
