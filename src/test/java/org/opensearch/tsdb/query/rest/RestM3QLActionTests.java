@@ -543,6 +543,200 @@ public class RestM3QLActionTests extends OpenSearchTestCase {
         assertThat(channel.capturedResponse().status(), equalTo(RestStatus.OK));
     }
 
+    // ========== CCS Minimize Roundtrips Parameter Tests ==========
+
+    /**
+     * Test that ccs_minimize_roundtrips defaults to true (OpenSearch default).
+     */
+    public void testCcsMinimizeRoundtripsDefaultTrue() throws Exception {
+        NodeClient mockClient = setupMockClientWithAssertion(searchRequest -> {
+            assertNotNull("SearchRequest should not be null", searchRequest);
+            assertTrue("ccs_minimize_roundtrips should default to true", searchRequest.isCcsMinimizeRoundtrips());
+        });
+
+        FakeRestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withMethod(RestRequest.Method.GET)
+            .withPath("/_m3ql")
+            .withParams(Map.of("query", "fetch service:api", "step", "10000"))
+            .build();
+        FakeRestChannel channel = new FakeRestChannel(request, true, 1);
+
+        action.handleRequest(request, channel, mockClient);
+
+        assertThat(channel.capturedResponse().status(), equalTo(RestStatus.OK));
+    }
+
+    /**
+     * Test that ccs_minimize_roundtrips can be explicitly set to false via request parameter.
+     */
+    public void testCcsMinimizeRoundtripsExplicitFalse() throws Exception {
+        NodeClient mockClient = setupMockClientWithAssertion(searchRequest -> {
+            assertNotNull("SearchRequest should not be null", searchRequest);
+            assertFalse("ccs_minimize_roundtrips should be false", searchRequest.isCcsMinimizeRoundtrips());
+        });
+
+        FakeRestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withMethod(RestRequest.Method.GET)
+            .withPath("/_m3ql")
+            .withParams(Map.of("query", "fetch service:api", "ccs_minimize_roundtrips", "false", "step", "10000"))
+            .build();
+        FakeRestChannel channel = new FakeRestChannel(request, true, 1);
+
+        action.handleRequest(request, channel, mockClient);
+
+        assertThat(channel.capturedResponse().status(), equalTo(RestStatus.OK));
+    }
+
+    /**
+     * Test that ccs_minimize_roundtrips can be explicitly set to true via request parameter.
+     */
+    public void testCcsMinimizeRoundtripsExplicitTrue() throws Exception {
+        NodeClient mockClient = setupMockClientWithAssertion(searchRequest -> {
+            assertNotNull("SearchRequest should not be null", searchRequest);
+            assertTrue("ccs_minimize_roundtrips should be true", searchRequest.isCcsMinimizeRoundtrips());
+        });
+
+        FakeRestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withMethod(RestRequest.Method.GET)
+            .withPath("/_m3ql")
+            .withParams(Map.of("query", "fetch service:api", "ccs_minimize_roundtrips", "true", "step", "10000"))
+            .build();
+        FakeRestChannel channel = new FakeRestChannel(request, true, 1);
+
+        action.handleRequest(request, channel, mockClient);
+
+        assertThat(channel.capturedResponse().status(), equalTo(RestStatus.OK));
+    }
+
+    /**
+     * Test that cluster setting tsdb_engine.query.ccs_minimize_roundtrips affects default behavior.
+     */
+    public void testCcsMinimizeRoundtripsClusterSettingDefaultFalse() throws Exception {
+        // Create a RestM3QLAction with ccs_minimize_roundtrips cluster setting set to false
+        Settings initialSettings = Settings.builder().put("tsdb_engine.query.ccs_minimize_roundtrips", false).build();
+        TSDBPlugin plugin = new TSDBPlugin();
+        ClusterSettings testClusterSettings = new ClusterSettings(
+            initialSettings,
+            plugin.getSettings().stream().filter(Setting::hasNodeScope).collect(java.util.stream.Collectors.toCollection(HashSet::new))
+        );
+        ClusterService mockClusterServiceForTest = mock(ClusterService.class);
+        IndexNameExpressionResolver mockResolverForTest = mock(IndexNameExpressionResolver.class);
+        RemoteIndexSettingsCache mockCacheForTest = mock(RemoteIndexSettingsCache.class);
+        RestM3QLAction actionWithSetting = new RestM3QLAction(
+            testClusterSettings,
+            mockClusterServiceForTest,
+            mockResolverForTest,
+            mockCacheForTest
+        );
+
+        NodeClient mockClient = setupMockClientWithAssertion(searchRequest -> {
+            assertNotNull("SearchRequest should not be null", searchRequest);
+            assertFalse("ccs_minimize_roundtrips should default to cluster setting (false)", searchRequest.isCcsMinimizeRoundtrips());
+        });
+
+        FakeRestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withMethod(RestRequest.Method.GET)
+            .withPath("/_m3ql")
+            .withParams(Map.of("query", "fetch service:api", "step", "10000"))
+            .build();
+        FakeRestChannel channel = new FakeRestChannel(request, true, 1);
+
+        actionWithSetting.handleRequest(request, channel, mockClient);
+
+        assertThat(channel.capturedResponse().status(), equalTo(RestStatus.OK));
+    }
+
+    /**
+     * Test that request parameter overrides cluster setting.
+     */
+    public void testCcsMinimizeRoundtripsRequestParamOverridesClusterSetting() throws Exception {
+        // Create a RestM3QLAction with ccs_minimize_roundtrips cluster setting set to false
+        Settings initialSettings = Settings.builder().put("tsdb_engine.query.ccs_minimize_roundtrips", false).build();
+        TSDBPlugin plugin = new TSDBPlugin();
+        ClusterSettings testClusterSettings = new ClusterSettings(
+            initialSettings,
+            plugin.getSettings().stream().filter(Setting::hasNodeScope).collect(java.util.stream.Collectors.toCollection(HashSet::new))
+        );
+        ClusterService mockClusterServiceForTest = mock(ClusterService.class);
+        IndexNameExpressionResolver mockResolverForTest = mock(IndexNameExpressionResolver.class);
+        RemoteIndexSettingsCache mockCacheForTest = mock(RemoteIndexSettingsCache.class);
+        RestM3QLAction actionWithSetting = new RestM3QLAction(
+            testClusterSettings,
+            mockClusterServiceForTest,
+            mockResolverForTest,
+            mockCacheForTest
+        );
+
+        NodeClient mockClient = setupMockClientWithAssertion(searchRequest -> {
+            assertNotNull("SearchRequest should not be null", searchRequest);
+            assertTrue("ccs_minimize_roundtrips request param should override cluster setting", searchRequest.isCcsMinimizeRoundtrips());
+        });
+
+        FakeRestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withMethod(RestRequest.Method.GET)
+            .withPath("/_m3ql")
+            .withParams(Map.of("query", "fetch service:api", "ccs_minimize_roundtrips", "true", "step", "10000"))
+            .build();
+        FakeRestChannel channel = new FakeRestChannel(request, true, 1);
+
+        actionWithSetting.handleRequest(request, channel, mockClient);
+
+        assertThat(channel.capturedResponse().status(), equalTo(RestStatus.OK));
+    }
+
+    /**
+     * Test that ccs_minimize_roundtrips cluster setting can be dynamically updated.
+     */
+    public void testCcsMinimizeRoundtripsClusterSettingDynamicUpdate() throws Exception {
+        // Create a RestM3QLAction with ccs_minimize_roundtrips initially set to true
+        Settings initialSettings = Settings.builder().put("tsdb_engine.query.ccs_minimize_roundtrips", true).build();
+        TSDBPlugin plugin = new TSDBPlugin();
+        ClusterSettings testClusterSettings = new ClusterSettings(
+            initialSettings,
+            plugin.getSettings().stream().filter(Setting::hasNodeScope).collect(java.util.stream.Collectors.toCollection(HashSet::new))
+        );
+        ClusterService mockClusterServiceForTest = mock(ClusterService.class);
+        IndexNameExpressionResolver mockResolverForTest = mock(IndexNameExpressionResolver.class);
+        RemoteIndexSettingsCache mockCacheForTest = mock(RemoteIndexSettingsCache.class);
+        RestM3QLAction actionWithDynamicSetting = new RestM3QLAction(
+            testClusterSettings,
+            mockClusterServiceForTest,
+            mockResolverForTest,
+            mockCacheForTest
+        );
+
+        // First, verify that with ccs_minimize_roundtrips=true, the setting is respected
+        NodeClient mockClient1 = setupMockClientWithAssertion(searchRequest -> {
+            assertNotNull("SearchRequest should not be null", searchRequest);
+            assertTrue("ccs_minimize_roundtrips should default to true", searchRequest.isCcsMinimizeRoundtrips());
+        });
+
+        FakeRestRequest request1 = new FakeRestRequest.Builder(xContentRegistry()).withMethod(RestRequest.Method.GET)
+            .withPath("/_m3ql")
+            .withParams(Map.of("query", "fetch service:api", "step", "10000"))
+            .build();
+        FakeRestChannel channel1 = new FakeRestChannel(request1, true, 1);
+
+        actionWithDynamicSetting.handleRequest(request1, channel1, mockClient1);
+        assertThat(channel1.capturedResponse().status(), equalTo(RestStatus.OK));
+
+        // Now dynamically update the setting to false
+        testClusterSettings.applySettings(Settings.builder().put("tsdb_engine.query.ccs_minimize_roundtrips", false).build());
+
+        // Verify the updated setting is reflected
+        NodeClient mockClient2 = setupMockClientWithAssertion(searchRequest -> {
+            assertNotNull("SearchRequest should not be null", searchRequest);
+            assertFalse(
+                "ccs_minimize_roundtrips should now default to false after dynamic update",
+                searchRequest.isCcsMinimizeRoundtrips()
+            );
+        });
+
+        FakeRestRequest request2 = new FakeRestRequest.Builder(xContentRegistry()).withMethod(RestRequest.Method.GET)
+            .withPath("/_m3ql")
+            .withParams(Map.of("query", "fetch service:api", "step", "10000"))
+            .build();
+        FakeRestChannel channel2 = new FakeRestChannel(request2, true, 1);
+
+        actionWithDynamicSetting.handleRequest(request2, channel2, mockClient2);
+        assertThat(channel2.capturedResponse().status(), equalTo(RestStatus.OK));
+    }
+
     // ========== Error Handling Tests ==========
 
     public void testInvalidM3QLQueryReturnsError() throws Exception {
