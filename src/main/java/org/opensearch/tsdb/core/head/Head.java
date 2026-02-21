@@ -41,6 +41,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Head storage implementation for active time series data.
@@ -66,6 +67,32 @@ public class Head implements Closeable {
     // This will be used to track when a new chunk boundary is crossed to determine total closeable chunks.
     private volatile long lastProcessedChunkBoundary = 0;
     private volatile int cachedChunksToProcess = 0;
+
+    // Counters to track chunk activities.
+    private final AtomicLong createdChunksCount = new AtomicLong(0);
+    private final AtomicLong closedChunksCount = new AtomicLong(0);
+
+    /**
+     * Singleton event listener implementation for tracking chunk lifecycle events.
+     */
+    private final SeriesEventListener eventListener = new SeriesEventListener() {
+        @Override
+        public void onChunksCreated(long count) {
+            TSDBMetrics.incrementCounter(TSDBMetrics.ENGINE.memChunksCreated, count);
+            createdChunksCount.addAndGet(count);
+        }
+
+        @Override
+        public void onChunksClosed(long count) {
+            TSDBMetrics.incrementCounter(TSDBMetrics.ENGINE.memChunksClosedTotal, count, metricTags);
+            closedChunksCount.addAndGet(count);
+        }
+
+        @Override
+        public void onChunksExpired(long count) {
+            TSDBMetrics.incrementCounter(TSDBMetrics.ENGINE.memChunksExpiredTotal, count);
+        }
+    };
 
     /**
      * Constructs a new Head instance.
@@ -186,7 +213,7 @@ public class Head implements Closeable {
         }
 
         // Create new series (stub if no labels, normal if has labels)
-        MemSeries newSeries = hasLabels ? new MemSeries(hash, labels) : new MemSeries(hash, null, true);
+        MemSeries newSeries = hasLabels ? new MemSeries(hash, labels, eventListener) : new MemSeries(hash, null, true, eventListener);
         MemSeries actualSeries = seriesMap.putIfAbsent(newSeries);
         boolean isNewSeriesCreated = actualSeries == newSeries;
 
@@ -222,9 +249,9 @@ public class Head implements Closeable {
     /**
      * Upgrades a stub series with labels and adds it to the LiveSeriesIndex.
      *
-     * @param series the stub series to upgrade
-     * @param hash the series reference hash
-     * @param labels the labels to add to the series
+     * @param series    the stub series to upgrade
+     * @param hash      the series reference hash
+     * @param labels    the labels to add to the series
      * @param timestamp the timestamp to use if no chunks exist yet
      * @return SeriesResult with created=true to indicate labels should be persisted
      */
@@ -327,7 +354,7 @@ public class Head implements Closeable {
     /**
      * Closes all MemChunks in the head that will not have new samples added.
      *
-     * @param allowDropEmptySeries whether to allow dropping empty series after closing chunks
+     * @param allowDropEmptySeries                 whether to allow dropping empty series after closing chunks
      * @param maxCloseableChunksPerFlushPercentage percentage of closeable chunks to close in this flush operation. A value of 100 disables rate limiting.
      * @return the minimum sequence number of all in-memory samples after closing chunks, or Long.MAX_VALUE if all in-memory chunks are closed
      */
@@ -367,8 +394,6 @@ public class Head implements Closeable {
             closedSeries = dropEmptySeries(indexChunksResult.minSeqNo());
         }
 
-        // Record push-based counters (pull-based gauges registered separately via TSDBEngine.registerHeadGauges)
-        TSDBMetrics.incrementCounter(TSDBMetrics.ENGINE.memChunksClosedTotal, indexChunksResult.numClosedChunks(), metricTags);
         if (closedSeries > 0) {
             TSDBMetrics.incrementCounter(TSDBMetrics.ENGINE.seriesClosedTotal, closedSeries, metricTags);
         }
@@ -424,10 +449,10 @@ public class Head implements Closeable {
      * (say t + 20 min, with 20 min chunk range), 100 chunks will be attempted to close till next chunk range is reached (t + 40 min). At t + 40 min,
      * the target number of closeable chunks is recomputed based on the new total number of closeable chunks.
      *
-     * @param seriesList the list of MemSeries to process
-     * @param allowDropStubSeries whether to allow deleting orphaned stub series
+     * @param seriesList                           the list of MemSeries to process
+     * @param allowDropStubSeries                  whether to allow deleting orphaned stub series
      * @param maxCloseableChunksPerFlushPercentage percentage of closeable chunks to close
-     * @param cutoffTimestamp the cutoff timestamp for determining closeable chunks (maxTime - oooCutoffWindow)
+     * @param cutoffTimestamp                      the cutoff timestamp for determining closeable chunks (maxTime - oooCutoffWindow)
      * @return the result containing closed chunks and the minimum sequence number of in-memory samples
      */
     private IndexChunksResult indexCloseableChunks(
@@ -562,6 +587,8 @@ public class Head implements Closeable {
                 totalClosedChunks++;
             } catch (IOException e) {
                 throw new RuntimeException(e);
+            } finally {
+                eventListener.onChunksClosed(totalClosedChunks);
             }
         }
 
@@ -598,10 +625,10 @@ public class Head implements Closeable {
      * Result of indexing closeable chunks operation.
      *
      * @param seriesRefToClosedChunks map of MemSeries references to the set of MemChunks that were successfully indexed and should be dropped from memory
-     * @param minSeqNo             minimum sequence number among all remaining in-memory (non-closed) samples, or Long.MAX_VALUE if all chunks were closed
-     * @param numClosedChunks      total count of MemChunks that were closed and indexed
-     * @param minTimestamp         minimum timestamp among all remaining in-memory (non-closed) samples, or Long.MAX_VALUE if all chunks were closed
-     * @param deferredChunkCount   number of chunks that were closeable but deferred due to rate limiting
+     * @param minSeqNo                minimum sequence number among all remaining in-memory (non-closed) samples, or Long.MAX_VALUE if all chunks were closed
+     * @param numClosedChunks         total count of MemChunks that were closed and indexed
+     * @param minTimestamp            minimum timestamp among all remaining in-memory (non-closed) samples, or Long.MAX_VALUE if all chunks were closed
+     * @param deferredChunkCount      number of chunks that were closeable but deferred due to rate limiting
      */
     public record IndexChunksResult(Map<Long, Set<MemChunk>> seriesRefToClosedChunks, long minSeqNo, int numClosedChunks, long minTimestamp,
         int deferredChunkCount) {
@@ -673,6 +700,15 @@ public class Head implements Closeable {
     }
 
     /**
+     * Get the total count of open (not yet closed) memory chunks across all series.
+     *
+     * @return count of open chunks, or 0 if no series exist
+     */
+    public long getNumOpenChunks() {
+        return Math.max(0, createdChunksCount.get() - closedChunksCount.get());
+    }
+
+    /**
      * Closes the head, flushing any pending writes to disk and writing a snapshot of the head state. Assumes that writes have stopped
      * before this is called.
      *
@@ -683,7 +719,7 @@ public class Head implements Closeable {
     }
 
     private void loadSeries() {
-        liveSeriesIndex.loadSeriesFromIndex(new HeadSeriesLoader());
+        liveSeriesIndex.loadSeriesFromIndex(new HeadSeriesLoader(), eventListener);
         log.info("Loaded {} series into head", getNumSeries());
 
         liveSeriesIndex.updateSeriesFromCommitData(new SeqNoUpdater());
@@ -870,12 +906,12 @@ public class Head implements Closeable {
          * The failureCallback is executed in case of errors. Note that callback and failureCallback are mutually exclusive,
          * and will not be executed together.
          *
-         * @param context  the append context containing options for chunk management
-         * @param callback optional callback to execute under lock after appending the sample, this persists the series' labels
+         * @param context         the append context containing options for chunk management
+         * @param callback        optional callback to execute under lock after appending the sample, this persists the series' labels
          * @param failureCallback callback to execute in case of errors
          * @return true if sample was appended, false otherwise
          * @throws InterruptedException if the thread is interrupted while waiting for the series lock (append failed)
-         * @throws RuntimeException if series creation or translog write fails
+         * @throws RuntimeException     if series creation or translog write fails
          */
         protected boolean appendSample(AppendContext context, Runnable callback, Runnable failureCallback) throws InterruptedException {
             if (series == null) {
