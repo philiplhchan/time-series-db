@@ -188,7 +188,7 @@ public class RestM3QLAction extends BaseTSDBAction {
         final Map<String, String> tags = new HashMap<>();
         tags.put("explain", "unknown");
         tags.put("pushdown", "unknown");
-        tags.put("ccs_minimize_roundtrips", "true"); // opensearch defaults to true
+        tags.put("ccs_minimize_roundtrips", "unknown"); // opensearch defaults to true
 
         // Pre-consume all parameters synchronously to satisfy REST framework
         // This must happen before returning RestChannelConsumer
