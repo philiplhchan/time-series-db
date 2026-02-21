@@ -1177,7 +1177,10 @@ public class RestM3QLActionTests extends OpenSearchTestCase {
         // Using timeout() to handle any potential async delays in the handler
         verify(mockCounter, timeout(1000)).add(eq(1.0d), tagsCaptor.capture());
         Tags capturedTags = tagsCaptor.getValue();
-        assertThat(capturedTags.getTagsMap(), equalTo(Map.of("pushdown", "true", "reached_step", "search", "explain", "false")));
+        assertThat(
+            capturedTags.getTagsMap(),
+            equalTo(Map.of("pushdown", "true", "reached_step", "search", "explain", "false", "ccs_minimize_roundtrips", "true"))
+        );
 
         // Cleanup
         TSDBMetrics.cleanup();
@@ -1211,7 +1214,10 @@ public class RestM3QLActionTests extends OpenSearchTestCase {
         // Verify counter was incremented and capture tags
         // Using timeout() to handle any potential async delays in the handler
         verify(mockCounter, timeout(1000)).add(eq(1.0d), assertArg(tags -> {
-            assertThat(tags.getTagsMap(), equalTo(Map.of("explain", "true", "pushdown", "true", "reached_step", "explain")));
+            assertThat(
+                tags.getTagsMap(),
+                equalTo(Map.of("explain", "true", "pushdown", "true", "reached_step", "explain", "ccs_minimize_roundtrips", "unknown"))
+            );
         }));
 
         // Cleanup
@@ -1246,7 +1252,21 @@ public class RestM3QLActionTests extends OpenSearchTestCase {
         // Verify counter was incremented and capture tags
         // Using timeout() to handle any potential async delays in the handler
         verify(mockCounter, timeout(1000)).add(eq(1.0d), assertArg(tags -> {
-            assertThat(tags.getTagsMap(), equalTo(Map.of("explain", "false", "pushdown", "true", "reached_step", "error__missing_query")));
+            assertThat(
+                tags.getTagsMap(),
+                equalTo(
+                    Map.of(
+                        "explain",
+                        "false",
+                        "pushdown",
+                        "true",
+                        "reached_step",
+                        "error__missing_query",
+                        "ccs_minimize_roundtrips",
+                        "unknown"
+                    )
+                )
+            );
         }));
 
         // Cleanup
