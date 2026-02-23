@@ -517,6 +517,16 @@ public class TSDBPlugin extends Plugin implements SearchPlugin, EnginePlugin, Ac
     );
 
     /**
+     * Setting to set the OpenSearch ccs_minimize_roundtrip parameter for all requests
+     */
+    public static final Setting<Boolean> TSDB_ENGINE_CCS_MINIMIZE_ROUNDTRIPS = Setting.boolSetting(
+        "tsdb_engine.query.ccs_minimize_roundtrips",
+        true,  // default: true (follows default OpenSearch behavior)
+        Setting.Property.NodeScope,
+        Setting.Property.Dynamic
+    );
+
+    /**
      * Setting for the default step size (query resolution) for M3QL queries.
      * This defines the default time interval between data points in query results.
      * Can be overridden by the 'step' parameter in individual M3QL queries.
@@ -644,6 +654,7 @@ public class TSDBPlugin extends Plugin implements SearchPlugin, EnginePlugin, Ac
             TSDB_ENGINE_WILDCARD_QUERY_CACHE_EXPIRE_AFTER,
             TSDB_ENGINE_FORCE_NO_PUSHDOWN,
             TSDB_ENGINE_ENABLE_INTERNAL_AGG_CHUNK_COMPRESSION,
+            TSDB_ENGINE_CCS_MINIMIZE_ROUNDTRIPS,
             TSDB_ENGINE_DEFAULT_STEP,
             TSDB_ENGINE_REMOTE_INDEX_SETTINGS_CACHE_TTL,
             TSDB_ENGINE_REMOTE_INDEX_SETTINGS_CACHE_MAX_SIZE
