@@ -28,12 +28,14 @@ import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.env.Environment;
 import org.opensearch.env.NodeEnvironment;
 import org.opensearch.env.ShardLock;
+import org.opensearch.index.IndexModule;
 import org.opensearch.index.IndexSettings;
 import org.opensearch.index.engine.EngineFactory;
 import org.opensearch.index.engine.TSDBEngineFactory;
 import org.opensearch.index.shard.IndexSettingProvider;
 import org.opensearch.index.shard.ShardPath;
 import org.opensearch.index.store.Store;
+import org.opensearch.action.support.ActionFilter;
 import org.opensearch.plugins.ActionPlugin;
 import org.opensearch.plugins.EnginePlugin;
 import org.opensearch.plugins.IndexStorePlugin;
@@ -43,6 +45,7 @@ import org.opensearch.plugins.TelemetryAwarePlugin;
 import org.opensearch.repositories.RepositoriesService;
 import org.opensearch.rest.RestController;
 import org.opensearch.rest.RestHandler;
+import org.opensearch.rest.RestHeaderDefinition;
 import org.opensearch.script.ScriptService;
 import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.fetch.FetchSubPhase;
@@ -51,8 +54,12 @@ import org.opensearch.telemetry.tracing.Tracer;
 import org.opensearch.threadpool.ExecutorBuilder;
 import org.opensearch.threadpool.FixedExecutorBuilder;
 import org.opensearch.threadpool.ThreadPool;
+import org.opensearch.tsdb.action.TSDBIngestionLagActionFilter;
+import org.opensearch.tsdb.action.TSDBIngestionLagIndexingListener;
 import org.opensearch.tsdb.lang.m3.M3QLMetrics;
+import org.opensearch.tsdb.metrics.TSDBIngestionLagMetrics;
 import org.opensearch.tsdb.metrics.TSDBMetrics;
+import org.opensearch.tsdb.metrics.TSDBMetricsConstants;
 import org.opensearch.tsdb.query.fetch.LabelsFetchBuilder;
 import org.opensearch.tsdb.query.fetch.LabelsFetchSubPhase;
 import org.opensearch.tsdb.query.search.CachedWildcardQueryBuilder;
@@ -110,9 +117,18 @@ public class TSDBPlugin extends Plugin implements SearchPlugin, EnginePlugin, Ac
 
     // Cluster service for REST handlers
     private volatile ClusterService clusterService;
+    // ThreadPool for ingestion lag indexing listener
+    private volatile ThreadPool threadPool;
 
     // Singleton cache for remote index settings
     private volatile RemoteIndexSettingsCache remoteIndexSettingsCache;
+
+    // Ingestion lag metrics
+    private TSDBIngestionLagMetrics ingestionLagMetrics;
+    private TSDBIngestionLagActionFilter ingestionLagActionFilter;
+    private TSDBIngestionLagIndexingListener ingestionLagIndexingListener;
+    private volatile boolean coordinatorMetricsEnabled;
+    private volatile boolean searchableMetricsEnabled;
 
     /**
      * This setting identifies if the tsdb engine is enabled for the index.
@@ -570,6 +586,28 @@ public class TSDBPlugin extends Plugin implements SearchPlugin, EnginePlugin, Ac
     );
 
     /**
+     * Setting to enable/disable coordinator ingestion lag metric (Metric 1).
+     * When disabled, TSDBIngestionLagActionFilter will skip metric collection.
+     */
+    public static final Setting<Boolean> TSDB_INGESTION_LAG_COORDINATOR_METRICS_ENABLED = Setting.boolSetting(
+        "tsdb.ingestion.lag.coordinator.metrics.enabled",
+        true,  // default: enabled
+        Setting.Property.NodeScope,
+        Setting.Property.Dynamic
+    );
+
+    /**
+     * Setting to enable/disable searchable ingestion lag metric (Metric 2).
+     * When disabled, TSDBIngestionLagIndexingListener will skip metric collection.
+     */
+    public static final Setting<Boolean> TSDB_INGESTION_LAG_SEARCHABLE_METRICS_ENABLED = Setting.boolSetting(
+        "tsdb.ingestion.lag.searchable.metrics.enabled",
+        true,  // default: enabled
+        Setting.Property.NodeScope,
+        Setting.Property.Dynamic
+    );
+
+    /**
      * Default constructor
      */
     public TSDBPlugin() {}
@@ -614,6 +652,20 @@ public class TSDBPlugin extends Plugin implements SearchPlugin, EnginePlugin, Ac
                 }
             );
 
+        // Initialize ingestion lag metrics enabled settings
+        this.coordinatorMetricsEnabled = TSDB_INGESTION_LAG_COORDINATOR_METRICS_ENABLED.get(environment.settings());
+        this.searchableMetricsEnabled = TSDB_INGESTION_LAG_SEARCHABLE_METRICS_ENABLED.get(environment.settings());
+
+        // Register settings update consumers for dynamic updates
+        clusterService.getClusterSettings().addSettingsUpdateConsumer(TSDB_INGESTION_LAG_COORDINATOR_METRICS_ENABLED, enabled -> {
+            this.coordinatorMetricsEnabled = enabled;
+            logger.info("Coordinator ingestion lag metrics {}", enabled ? "enabled" : "disabled");
+        });
+        clusterService.getClusterSettings().addSettingsUpdateConsumer(TSDB_INGESTION_LAG_SEARCHABLE_METRICS_ENABLED, enabled -> {
+            this.searchableMetricsEnabled = enabled;
+            logger.info("Searchable ingestion lag metrics {}", enabled ? "enabled" : "disabled");
+        });
+
         if (metricsRegistry != null) {
             this.metricsRegistry = Optional.of(metricsRegistry);
             List<TSDBMetrics.MetricsInitializer> metricInitializers = new ArrayList<>(M3QLMetrics.getMetricsInitializers());
@@ -621,6 +673,21 @@ public class TSDBPlugin extends Plugin implements SearchPlugin, EnginePlugin, Ac
             // Register PromQL REST action metrics
             metricInitializers.add(RestPromQLAction.getMetricsInitializer());
             TSDBMetrics.initialize(metricsRegistry, metricInitializers.toArray(new TSDBMetrics.MetricsInitializer[0]));
+
+            // Initialize ingestion lag metrics
+            ingestionLagMetrics = new TSDBIngestionLagMetrics();
+            ingestionLagMetrics.initialize(metricsRegistry);
+            ingestionLagActionFilter = new TSDBIngestionLagActionFilter(
+                threadPool.getThreadContext(),
+                ingestionLagMetrics,
+                () -> coordinatorMetricsEnabled
+            );
+            ingestionLagIndexingListener = new TSDBIngestionLagIndexingListener(
+                threadPool.getThreadContext(),
+                ingestionLagMetrics,
+                () -> searchableMetricsEnabled
+            );
+            this.threadPool = threadPool;
         } else {
             logger.warn("MetricsRegistry is null; TSDB metrics not initialized");
         }
@@ -657,7 +724,9 @@ public class TSDBPlugin extends Plugin implements SearchPlugin, EnginePlugin, Ac
             TSDB_ENGINE_CCS_MINIMIZE_ROUNDTRIPS,
             TSDB_ENGINE_DEFAULT_STEP,
             TSDB_ENGINE_REMOTE_INDEX_SETTINGS_CACHE_TTL,
-            TSDB_ENGINE_REMOTE_INDEX_SETTINGS_CACHE_MAX_SIZE
+            TSDB_ENGINE_REMOTE_INDEX_SETTINGS_CACHE_MAX_SIZE,
+            TSDB_INGESTION_LAG_COORDINATOR_METRICS_ENABLED,
+            TSDB_INGESTION_LAG_SEARCHABLE_METRICS_ENABLED
         );
     }
 
@@ -833,6 +902,27 @@ public class TSDBPlugin extends Plugin implements SearchPlugin, EnginePlugin, Ac
         ) throws IOException {
             return new TSDBStore(shardId, indexSettings, directory, shardLock, onClose, shardPath, directoryFactory);
         }
+    }
+
+    @Override
+    public void onIndexModule(IndexModule indexModule) {
+        if (ingestionLagIndexingListener != null && TSDB_ENGINE_ENABLED.get(indexModule.getSettings())) {
+            indexModule.addIndexOperationListener(ingestionLagIndexingListener);
+            indexModule.addIndexEventListener(ingestionLagIndexingListener);
+        }
+    }
+
+    @Override
+    public List<ActionFilter> getActionFilters() {
+        if (ingestionLagActionFilter != null) {
+            return List.of(ingestionLagActionFilter);
+        }
+        return Collections.emptyList();
+    }
+
+    @Override
+    public Collection<RestHeaderDefinition> getRestHeaders() {
+        return List.of(new RestHeaderDefinition(TSDBMetricsConstants.HTTP_HEADER_MIN_SAMPLE_TIMESTAMP, false));
     }
 
     @Override

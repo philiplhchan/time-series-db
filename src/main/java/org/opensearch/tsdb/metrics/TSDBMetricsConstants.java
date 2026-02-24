@@ -160,6 +160,22 @@ public final class TSDBMetricsConstants {
     public static final String ACTION_REST_QUERIES_SHARD_LATENCY_MAX = "tsdb.action.rest.queries.shard.latency.max";
 
     // ============================================
+    // Ingestion Lag Metrics (Data Freshness)
+    // ============================================
+
+    /** Histogram: Latency from minimum sample timestamp to coordinator arrival (includes client batching + network) */
+    public static final String INGESTION_COORDINATOR_LAG = "tsdb.ingestion.coordinator.lag";
+
+    /** Histogram: Latency from minimum sample timestamp to when a sample is appended and queryable (existing series) */
+    public static final String INGESTION_APPEND_LAG = "tsdb.ingestion.append.lag";
+
+    /** Histogram: Latency from minimum sample timestamp to when a new series becomes discoverable after refresh */
+    public static final String INGESTION_REFRESH_LAG = "tsdb.ingestion.refresh.lag";
+
+    /** Counter: Pending bulk requests dropped because the per-shard tracking map was full */
+    public static final String INGESTION_LAG_PENDING_DROPPED_TOTAL = "tsdb.ingestion.lag.pending_dropped.total";
+
+    // ============================================
     // Search Metrics (Query Cache)
     // ============================================
 
@@ -329,6 +345,16 @@ public final class TSDBMetricsConstants {
     public static final String COMPACTION_LATENCY_DESC = "Latency (ms) of compaction operations";
     public static final String COMPACTION_DELETED_TOTAL_DESC = "Total number of indexes deleted by compaction";
 
+    // Ingestion Lag Metrics (Data Freshness)
+    public static final String INGESTION_COORDINATOR_LAG_DESC =
+        "Coordinator lag: time from minimum sample timestamp to coordinator arrival (includes client batching + network)";
+    public static final String INGESTION_APPEND_LAG_DESC =
+        "Append lag: time from minimum sample timestamp to when a sample is appended to an existing series and queryable";
+    public static final String INGESTION_REFRESH_LAG_DESC =
+        "Refresh lag: time from minimum sample timestamp to when a new series becomes discoverable after LiveSeriesIndex refresh";
+    public static final String INGESTION_LAG_PENDING_DROPPED_TOTAL_DESC =
+        "Pending bulk requests dropped because the per-shard tracking map was full";
+
     // ============================================
     // Metric Tags
     // ============================================
@@ -362,6 +388,26 @@ public final class TSDBMetricsConstants {
 
     /** Tag value for coordinator-level execution */
     public static final String TAG_LOCATION_COORDINATOR = "coordinator";
+
+    // ============================================
+    // Ingestion Lag HTTP Headers
+    // ============================================
+
+    /** HTTP header: minimum sample timestamp (ms) sent by the client in bulk requests */
+    public static final String HTTP_HEADER_MIN_SAMPLE_TIMESTAMP = "X-Min-Sample-Timestamp-Ms";
+
+    // ============================================
+    // Ingestion Lag Internal Headers
+    // ============================================
+
+    /** Internal header: unique identifier for a bulk request, forwarded from coordinator to data nodes */
+    public static final String HEADER_BULK_REQUEST_ID = "tsdb.bulk_request_id";
+
+    /** Internal header: minimum sample timestamp (ms) in a bulk request, forwarded from coordinator to data nodes */
+    public static final String HEADER_MIN_SAMPLE_TIMESTAMP = "tsdb.min_sample_timestamp_ms";
+
+    /** Internal header: number of index requests in a BulkShardRequest, forwarded from coordinator to data nodes */
+    public static final String HEADER_SHARD_INDEX_DOC_COUNT = "tsdb.shard_index_doc_count";
 
     // ============================================
     // Conversion Constants

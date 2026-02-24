@@ -81,7 +81,7 @@ public class TSDBPluginTests extends OpenSearchTestCase {
         List<Setting<?>> settings = plugin.getSettings();
 
         assertNotNull("Settings list should not be null", settings);
-        assertThat("Should have 24 settings", settings, hasSize(24));
+        assertThat("Should have 26 settings", settings, hasSize(26));
 
         // Verify TSDB_ENGINE_ENABLED is present
         assertTrue("Should contain TSDB_ENGINE_ENABLED setting", settings.contains(TSDBPlugin.TSDB_ENGINE_ENABLED));
@@ -380,6 +380,8 @@ public class TSDBPluginTests extends OpenSearchTestCase {
         allSettings.add(TSDBPlugin.TSDB_ENGINE_WILDCARD_QUERY_CACHE_EXPIRE_AFTER);
         allSettings.add(TSDBPlugin.TSDB_ENGINE_REMOTE_INDEX_SETTINGS_CACHE_TTL);
         allSettings.add(TSDBPlugin.TSDB_ENGINE_REMOTE_INDEX_SETTINGS_CACHE_MAX_SIZE);
+        allSettings.add(TSDBPlugin.TSDB_INGESTION_LAG_COORDINATOR_METRICS_ENABLED);
+        allSettings.add(TSDBPlugin.TSDB_INGESTION_LAG_SEARCHABLE_METRICS_ENABLED);
 
         ClusterSettings mockClusterSettings = new ClusterSettings(Settings.EMPTY, allSettings);
         when(mockClusterService.getClusterSettings()).thenReturn(mockClusterSettings);
