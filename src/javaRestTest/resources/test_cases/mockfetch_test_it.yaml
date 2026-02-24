@@ -1,0 +1,259 @@
+---
+# Test suite for mockFetch function
+test_setup:
+  name: "MockFetch Function Tests"
+  description: "Comprehensive tests for mockFetch synthetic data generation."
+
+  index_configs:
+    - name: "test_index"
+      shards: 1
+      replicas: 0
+
+test_case:
+  name: "MockFetch Tests"
+
+  input_data_list:
+    - index_name: "test_index"
+      input_data_type: FIXED_INTERVAL
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:01:00Z"
+        step: "1m"
+      regular_metrics:
+        # Dummy metric - required by test framework but not used by mockFetch
+        - labels: "name:dummy"
+          values: [0]
+
+  queries:
+    # Basic functionality tests
+    - name: "mockFetch_single_value"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetch 42.5"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:01:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "mockFetch"}
+            values: [42.5]
+
+    - name: "mockFetch_five_values"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetch 1,2,3,4,5"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:05:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "mockFetch"}
+            values: [1, 2, 3, 4, 5]
+
+    # Tag tests
+    - name: "mockFetch_with_single_tag"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetch 10,20,30 name:test_series"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:03:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "test_series"}
+            values: [10, 20, 30]
+
+    - name: "mockFetch_with_multiple_tags"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetch 10,20,30 name:test_series dc:dca1 env:prod"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:03:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "test_series", dc: "dca1", env: "prod"}
+            values: [10, 20, 30]
+
+    # Decimal and negative value tests
+    - name: "mockFetch_decimal_values"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetch 1.5,2.5,3.5,4.5"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:04:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "mockFetch"}
+            values: [1.5, 2.5, 3.5, 4.5]
+
+    - name: "mockFetch_mixed_positive_negative_decimals"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetch -2.5,5.0,12.5,-6.5 name:temperature"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:04:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "temperature"}
+            values: [-2.5, 5.0, 12.5, -6.5]
+
+    # Pipeline operation tests
+    - name: "mockFetch_with_scale"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetch 5,10,15,20 name:base | scale 2"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:04:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "base"}
+            values: [10, 20, 30, 40]
+
+    - name: "mockFetch_with_alias"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetch 100,200,300 name:metric region:us-west | alias MyTestSeries"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:03:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "metric", region: "us-west"}
+            alias: "MyTestSeries"
+            values: [100, 200, 300]
+
+    - name: "mockFetch_with_transformNull"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetch 1,2,3,nan,5 name:data | transformNull 0"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:04:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "data"}
+            values: [1, 2, 3, 0, 5]
+    - name: "mockFetch_with_Nan_values"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetch 1,NaN,3,nan,5 name:data nan:test NaN:another"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:04:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "data", nan: "test", NaN: "another"}
+            values: [1, null, 3, null, 5]
+    - name: "mockFetch_with_Nan_values_and_tag"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetch 1,2,3,Nan,5 name:data nan:test NaN:another | transformNull 0"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:04:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "data", nan: "test", NaN: "another"}
+            values: [1, 2, 3, 0, 5]
+
+    # Multiple mockFetch tests
+    - name: "mockFetch_union_two_series"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetch 1,2,3 name:series1 | mockFetch 4,5,6 name:series2"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:03:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "series1"}
+            values: [1, 2, 3]
+          - metric: {name: "series2"}
+            values: [4, 5, 6]
+
+    - name: "mockFetch_with_sum_aggregation"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetch 1,2,3 name:series1 | mockFetch 4,5,6 name:series2 | sum"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:03:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {}
+            values: [5, 7, 9]
+
+    # Single series aggregation
+    - name: "mockFetch_single_series_sum"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetch 1,2,3 | sum"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:03:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {}
+            values: [1, 2, 3]
+
+    # Different step sizes
+    - name: "mockFetch_large_step_size"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetch 1,2,3,4 name:coarse"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:30:00Z"
+        step: "10m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "coarse"}
+            values: [1, 2, 3, 4]
+
+    # Zero values
+    - name: "mockFetch_with_zeros"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetch 0,1,0,2,0"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:05:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "mockFetch"}
+            values: [0, 1, 0, 2, 0]

@@ -743,18 +743,23 @@ public class TimeSeriesCoordinatorAggregationBuilderTests extends OpenSearchTest
     }
 
     /**
-     * Test parsing with unsupported token type in stage arguments.
-     * This tests the error path for unsupported token types (e.g., nested objects).
+     * Test parsing MockFetch with nested objects in tags map - should reject nested structures.
+     * MockFetch is the only stage that accepts map arguments (for tags), but only flat maps are supported.
+     * This enforces time series best practices: tags/labels must be flat key-value pairs, no nesting.
      */
-    public void testParseStageWithUnsupportedTokenType() throws Exception {
+    public void testParseStageWithNestedMapRejectsNesting() throws Exception {
         String json = """
             {
               "buckets_path": [],
               "stages": [
                 {
-                  "type": "scale",
-                  "nested_object": {
-                    "key": "value"
+                  "type": "mockFetch",
+                  "values": [1.0, 2.0, 3.0],
+                  "tags": {
+                    "name": "series_a",
+                    "nested": {
+                      "deeply": "unsupported"
+                    }
                   }
                 }
               ],
@@ -766,13 +771,128 @@ public class TimeSeriesCoordinatorAggregationBuilderTests extends OpenSearchTest
         try (XContentParser parser = createParser(JsonXContent.jsonXContent, json)) {
             parser.nextToken(); // Move to START_OBJECT
 
-            // Should throw IllegalArgumentException for unsupported token type (nested object)
+            // Should throw IllegalArgumentException for nested object in flat map
+            // Only primitive values (string, number, boolean) are allowed in map values
             IllegalArgumentException exception = expectThrows(
                 IllegalArgumentException.class,
-                () -> TimeSeriesCoordinatorAggregationBuilder.parse("unsupported_test", parser)
+                () -> TimeSeriesCoordinatorAggregationBuilder.parse("flat_map_test", parser)
             );
 
-            assertTrue("Exception should mention unsupported token type", exception.getMessage().contains("Unsupported token type"));
+            assertTrue(
+                "Exception should mention unsupported map value type",
+                exception.getMessage().contains("Unsupported map value type")
+            );
+        }
+    }
+
+    /**
+     * Test parsing map with mixed value types (string, int, double, boolean).
+     * Comprehensive test covering all supported map value types together.
+     */
+    public void testParseStageWithMixedMapValueTypes() throws Exception {
+        String json = """
+            {
+              "stages": [
+                {
+                  "type": "mockFetch",
+                  "values": [10.0, 20.0, 30.0],
+                  "tags": {
+                    "name": "test_series",
+                    "datacenter": "us-west-2",
+                    "port": 8080,
+                    "timeout_ms": 5000,
+                    "threshold": 98.5,
+                    "ratio": 0.85,
+                    "production": true,
+                    "enabled": false
+                  }
+                }
+              ],
+              "references": {}
+            }
+            """;
+
+        try (XContentParser parser = createParser(JsonXContent.jsonXContent, json)) {
+            parser.nextToken(); // Move to START_OBJECT
+
+            TimeSeriesCoordinatorAggregationBuilder result = TimeSeriesCoordinatorAggregationBuilder.parse("mixed_map_test", parser);
+
+            assertEquals("mixed_map_test", result.getName());
+            assertEquals(1, result.getStages().size());
+            assertTrue(
+                "Stage should be MockFetchStage",
+                result.getStages().get(0) instanceof org.opensearch.tsdb.lang.m3.stage.MockFetchStage
+            );
+        }
+    }
+
+    /**
+     * Test parsing map with null value - should reject null in maps.
+     */
+    public void testParseStageWithMapNullValueThrows() throws Exception {
+        String json = """
+            {
+              "stages": [
+                {
+                  "type": "mockFetch",
+                  "values": [1.0, 2.0],
+                  "tags": {
+                    "name": "series_a",
+                    "nullField": null
+                  }
+                }
+              ],
+              "references": {}
+            }
+            """;
+
+        try (XContentParser parser = createParser(JsonXContent.jsonXContent, json)) {
+            parser.nextToken(); // Move to START_OBJECT
+
+            IllegalArgumentException exception = expectThrows(
+                IllegalArgumentException.class,
+                () -> TimeSeriesCoordinatorAggregationBuilder.parse("map_null_test", parser)
+            );
+
+            assertTrue(
+                "Exception should mention unsupported map value type",
+                exception.getMessage().contains("Unsupported map value type")
+            );
+        }
+    }
+
+    /**
+     * Test parsing map with array value - should reject arrays in maps.
+     */
+    public void testParseStageWithMapArrayValueThrows() throws Exception {
+        String json = """
+            {
+              "stages": [
+                {
+                  "type": "mockFetch",
+                  "values": [1.0, 2.0],
+                  "tags": {
+                    "name": "series_a",
+                    "values": [1, 2, 3]
+                  }
+                }
+              ],
+              "references": {}
+            }
+            """;
+
+        try (XContentParser parser = createParser(JsonXContent.jsonXContent, json)) {
+            parser.nextToken(); // Move to START_OBJECT
+
+            IllegalArgumentException exception = expectThrows(
+                IllegalArgumentException.class,
+                () -> TimeSeriesCoordinatorAggregationBuilder.parse("map_array_test", parser)
+            );
+
+            assertTrue(
+                "Exception should mention unsupported map value type",
+                exception.getMessage().contains("Unsupported map value type")
+            );
         }
     }
 

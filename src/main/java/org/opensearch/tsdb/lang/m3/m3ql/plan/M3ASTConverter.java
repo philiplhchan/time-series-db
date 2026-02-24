@@ -152,9 +152,13 @@ public class M3ASTConverter {
         return Objects.requireNonNull(resultPlanNode, "Found null plan node during query planning.");
     }
 
-    // True if M3ASTNode is a function node corresponding to a fetch, e.g. FUNCTION(fetch)
+    // True if M3ASTNode is a function node corresponding to a fetch, e.g. FUNCTION(fetch) or FUNCTION(mockFetch)
     private boolean isFetchFunction(M3ASTNode node) {
-        return node instanceof FunctionNode functionNode && Constants.Functions.FETCH.equals(functionNode.getFunctionName());
+        if (!(node instanceof FunctionNode functionNode)) {
+            return false;
+        }
+        String functionName = functionNode.getFunctionName();
+        return Constants.Functions.FETCH.equals(functionName) || Constants.Functions.MOCK_FETCH.equals(functionName);
     }
 
     // Handles a fetch function node by creating a FetchPlanNode and wrapping it in a ChainBoundaryMarker.

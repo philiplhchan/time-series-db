@@ -33,6 +33,7 @@ import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.KeepLastValuePlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.LogarithmPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.M3PlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.MapKeyPlanNode;
+import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.MockFetchPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.MovingPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.OffsetPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.PerSecondPlanNode;
@@ -98,6 +99,8 @@ public class M3PlanNodeFactory {
                 return FallbackSeriesConstantPlanNode.of(functionNode);
             case Constants.Functions.FETCH:
                 return FetchPlanNode.of(functionNode);
+            case Constants.Functions.MOCK_FETCH:
+                return MockFetchPlanNode.of(functionNode);
             case Constants.Functions.HEAD:
                 return HeadPlanNode.of(functionNode);
             case Constants.Functions.TAIL:

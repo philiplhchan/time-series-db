@@ -55,7 +55,6 @@ public class Constants {
             "divideWhen",
             "histogramCDF",
             "jainCP",
-            "mockFetch",
             "mockFetchLine",
             "mockFetchLinear",
             "mockFetchPeriodic",
@@ -145,6 +144,11 @@ public class Constants {
          * fetch function name.
          */
         public static final String FETCH = "fetch";
+
+        /**
+         * mockFetch function name.
+         */
+        public static final String MOCK_FETCH = "mockFetch";
 
         /**
          * head function name.

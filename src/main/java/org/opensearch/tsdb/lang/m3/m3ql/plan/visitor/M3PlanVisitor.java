@@ -28,6 +28,7 @@ import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.KeepLastValuePlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.LogarithmPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.M3PlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.MapKeyPlanNode;
+import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.MockFetchPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.MovingPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.OffsetPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.PerSecondPlanNode;
@@ -255,6 +256,15 @@ public abstract class M3PlanVisitor<T> {
      * @return the result of processing the LogarithmPlanNode
      */
     public T visit(LogarithmPlanNode planNode) {
+        return process(planNode);
+    }
+
+    /**
+     * Visit method for MockFetchPlanNode.
+     * @param planNode the MockFetchPlanNode to visit
+     * @return the result of processing the MockFetchPlanNode
+     */
+    public T visit(MockFetchPlanNode planNode) {
         return process(planNode);
     }
 

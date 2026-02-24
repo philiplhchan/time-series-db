@@ -38,6 +38,7 @@ import org.opensearch.tsdb.lang.m3.stage.KeepLastValueStage;
 import org.opensearch.tsdb.lang.m3.stage.LogarithmStage;
 import org.opensearch.tsdb.lang.m3.stage.MaxStage;
 import org.opensearch.tsdb.lang.m3.stage.MinStage;
+import org.opensearch.tsdb.lang.m3.stage.MockFetchStage;
 import org.opensearch.tsdb.lang.m3.stage.MovingStage;
 import org.opensearch.tsdb.lang.m3.stage.MultiplyStage;
 import org.opensearch.tsdb.lang.m3.stage.OffsetStage;
@@ -149,6 +150,7 @@ public class PipelineStageFactory {
             registerStage(MapKeyStage.class);
             registerStage(MaxStage.class);
             registerStage(MinStage.class);
+            registerStage(MockFetchStage.class);
             registerStage(MovingStage.class);
             registerStage(MultiplyStage.class);
             registerStage(OffsetStage.class);

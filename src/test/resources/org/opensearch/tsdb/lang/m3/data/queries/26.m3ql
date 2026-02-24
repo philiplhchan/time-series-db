@@ -1,0 +1,3 @@
+# comprehensive mockFetch test with complex pipeline operations
+# Tests: multiple mockFetch sources, binary operations, aggregations, transformations
+mockFetch 10,20,30 name:a env:prod | mockFetch 5,10,15 name:b env:dev | scale 2 | sum

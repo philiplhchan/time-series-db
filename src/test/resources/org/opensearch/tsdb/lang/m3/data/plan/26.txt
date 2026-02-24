@@ -1,0 +1,5 @@
+AGG(SUM, groupBy=[])
+  SCALE(2.0)
+    UNION
+      MOCK_FETCH(values=[10.0, 20.0, 30.0], tags={name=a, env=prod})
+      MOCK_FETCH(values=[5.0, 10.0, 15.0], tags={name=b, env=dev})

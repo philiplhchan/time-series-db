@@ -380,6 +380,39 @@ public class TimeSeriesCoordinatorAggregationBuilder extends AbstractPipelineAgg
                                             }
                                         }
                                         stageArgs.put(fieldName, arrayValues);
+                                    } else if (token == XContentParser.Token.START_OBJECT) {
+                                        // Parse object/map argument (e.g., tags)
+                                        Map<String, Object> mapValues = new HashMap<>();
+                                        while ((token = parser.nextToken()) != XContentParser.Token.END_OBJECT) {
+                                            if (token == XContentParser.Token.FIELD_NAME) {
+                                                String mapKey = parser.currentName();
+                                                token = parser.nextToken();
+                                                if (token == XContentParser.Token.VALUE_STRING) {
+                                                    mapValues.put(mapKey, parser.text());
+                                                } else if (token == XContentParser.Token.VALUE_NUMBER) {
+                                                    if (parser.numberType() == XContentParser.NumberType.INT) {
+                                                        mapValues.put(mapKey, parser.intValue());
+                                                    } else {
+                                                        mapValues.put(mapKey, parser.doubleValue());
+                                                    }
+                                                } else if (token == XContentParser.Token.VALUE_BOOLEAN) {
+                                                    mapValues.put(mapKey, parser.booleanValue());
+                                                } else {
+                                                    throw new IllegalArgumentException(
+                                                        "Unsupported map value type in stage argument '"
+                                                            + fieldName
+                                                            + "': "
+                                                            + token
+                                                            + ". Aggregation: "
+                                                            + aggregationName
+                                                            + ", Stage type: "
+                                                            + (stageType != null ? stageType : "unknown")
+                                                            + ". Supported map value types: string, number, boolean."
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        stageArgs.put(fieldName, mapValues);
                                     } else {
                                         throw new IllegalArgumentException(
                                             "Unsupported token type for stage argument '"
@@ -390,7 +423,7 @@ public class TimeSeriesCoordinatorAggregationBuilder extends AbstractPipelineAgg
                                                 + aggregationName
                                                 + ", Stage type: "
                                                 + (stageType != null ? stageType : "unknown")
-                                                + ". Supported types: string, number, or array of strings."
+                                                + ". Supported types: string, number, boolean, array, or object/map."
                                         );
                                     }
                                 }

@@ -56,6 +56,7 @@ import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.TransformNullPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.UnionPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.ValueFilterPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.WherePlanNode;
+import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.MockFetchPlanNode;
 import org.opensearch.tsdb.lang.m3.stage.MovingStage;
 import org.opensearch.tsdb.query.aggregator.TimeSeriesCoordinatorAggregationBuilder;
 import org.opensearch.tsdb.query.aggregator.TimeSeriesUnfoldAggregationBuilder;
@@ -66,6 +67,7 @@ import org.opensearch.tsdb.query.rest.ResolvedPartitions.ResolvedPartition;
 import org.opensearch.tsdb.query.rest.ResolvedPartitions.RoutingKey;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -1313,6 +1315,57 @@ public class SourceBuilderVisitorTests extends OpenSearchTestCase {
         Map<String, List<String>> matchFilters = Map.of("__name__", List.of("test_metric"));
         Map<String, List<String>> inverseMatchFilters = Map.of();
         return new FetchPlanNode(id, matchFilters, inverseMatchFilters);
+    }
+
+    // ========== MockFetch Tests ==========
+
+    /**
+     * Test MockFetchPlanNode visitor creates MockFetchStage.
+     */
+    public void testMockFetchPlanNode() {
+        MockFetchPlanNode planNode = new MockFetchPlanNode(1, List.of(1.0, 2.0, 3.0), Map.of("name", "test_metric"));
+
+        // Should not throw an exception
+        SourceBuilderVisitor.ComponentHolder result = visitor.visit(planNode);
+        assertNotNull(result);
+    }
+
+    /**
+     * Test MockFetchPlanNode with empty tags.
+     */
+    public void testMockFetchPlanNodeWithEmptyTags() {
+        MockFetchPlanNode planNode = new MockFetchPlanNode(1, List.of(10.0, 20.0, 30.0), Map.of());
+
+        // Should not throw an exception
+        SourceBuilderVisitor.ComponentHolder result = visitor.visit(planNode);
+        assertNotNull(result);
+    }
+
+    /**
+     * Test MockFetchPlanNode with truncation when samples exceed time range.
+     */
+    public void testMockFetchPlanNodeWithTruncation() {
+        M3OSTranslator.Params truncateParams = new M3OSTranslator.Params(
+            Constants.Time.DEFAULT_TIME_UNIT,
+            1000L,    // startTime
+            1050L,    // endTime - only 51ms window
+            1L,       // step - 1ms
+            true,
+            true,
+            null
+        );
+        SourceBuilderVisitor truncateVisitor = new SourceBuilderVisitor(truncateParams);
+
+        // 100 values but only 51 will fit in time range, triggering truncation
+        List<Double> manyValues = new ArrayList<>();
+        for (int i = 0; i < 100; i++) {
+            manyValues.add((double) i);
+        }
+        MockFetchPlanNode planNode = new MockFetchPlanNode(1, manyValues, Map.of("name", "test"));
+
+        // Should not throw and should handle truncation
+        SourceBuilderVisitor.ComponentHolder result = truncateVisitor.visit(planNode);
+        assertNotNull(result);
     }
 
     // ========== Metrics Tests ==========

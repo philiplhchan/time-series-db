@@ -8,6 +8,7 @@
 package org.opensearch.tsdb.lang.m3.dsl;
 
 import org.opensearch.index.query.BoolQueryBuilder;
+import org.opensearch.index.query.MatchNoneQueryBuilder;
 import org.opensearch.index.query.QueryBuilder;
 import org.opensearch.index.query.QueryBuilders;
 import org.opensearch.search.aggregations.PipelineAggregationBuilder;
@@ -51,6 +52,7 @@ import org.opensearch.tsdb.lang.m3.stage.LogarithmStage;
 import org.opensearch.tsdb.lang.m3.stage.MapKeyStage;
 import org.opensearch.tsdb.lang.m3.stage.MaxStage;
 import org.opensearch.tsdb.lang.m3.stage.MinStage;
+import org.opensearch.tsdb.lang.m3.stage.MockFetchStage;
 import org.opensearch.tsdb.lang.m3.stage.OffsetStage;
 import org.opensearch.tsdb.lang.m3.stage.MovingStage;
 import org.opensearch.tsdb.lang.m3.stage.PerSecondRateStage;
@@ -95,6 +97,7 @@ import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.KeepLastValuePlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.LogarithmPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.M3PlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.MapKeyPlanNode;
+import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.MockFetchPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.MovingPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.OffsetPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.PerSecondPlanNode;
@@ -409,6 +412,55 @@ public class SourceBuilderVisitor extends M3PlanVisitor<SourceBuilderVisitor.Com
                 )
             );
         }
+
+        return holder;
+    }
+
+    @Override
+    public ComponentHolder visit(MockFetchPlanNode planNode) {
+        // Create MockFetchStage - generates synthetic data on coordinator
+        MockFetchStage mockFetchStage = new MockFetchStage(planNode.getValues(), planNode.getTags(), params.startTime(), params.step());
+
+        // Build coordinator stages: MockFetchStage followed by all accumulated pipeline stages
+        List<PipelineStage> coordinatorStages = new ArrayList<>();
+        coordinatorStages.add(mockFetchStage);
+        while (!stageStack.isEmpty()) {
+            coordinatorStages.add(stageStack.pop());
+        }
+
+        ComponentHolder holder = new ComponentHolder(planNode.getId());
+
+        // Use MatchNoneQueryBuilder to match 0 documents without scanning data.
+        // MockFetchStage generates synthetic data during coordinator reduce phase.
+        holder.addQuery(new MatchNoneQueryBuilder());
+
+        // Create a dummy TimeSeriesUnfoldAggregationBuilder as the parent aggregation
+        // The unfold won't execute - MockFetchStage generates all data during coordinator reduce phase
+        String unfoldAggName = planNode.getId() + "_unfold";
+        TimeSeriesUnfoldAggregationBuilder unfoldAgg = new TimeSeriesUnfoldAggregationBuilder(
+            unfoldAggName,
+            null,  // null stages - MockFetchStage will provide all the data
+            params.startTime(),
+            params.endTime(),
+            params.step()
+        );
+
+        // Wrap unfold in a filter aggregation with MatchNoneQueryBuilder
+        FilterAggregationBuilder filterAgg = new FilterAggregationBuilder(String.valueOf(planNode.getId()), new MatchNoneQueryBuilder());
+        filterAgg.subAggregation(unfoldAgg);
+        holder.addFilterAggregationBuilder(filterAgg);
+
+        // Add coordinator that references the unfold aggregation
+        String unfoldPath = planNode.getId() + ">" + unfoldAggName;
+        holder.addPipelineAggregationBuilder(
+            new TimeSeriesCoordinatorAggregationBuilder(
+                planNode.getId() + COORDINATOR_NAME_SUFFIX,
+                coordinatorStages,
+                EMPTY_MAP,  // No macros
+                Map.of(unfoldAggName, unfoldPath),  // Reference the unfold
+                unfoldAggName  // Use unfold as input (MockFetchStage will replace its data)
+            )
+        );
 
         return holder;
     }
@@ -954,10 +1006,21 @@ public class SourceBuilderVisitor extends M3PlanVisitor<SourceBuilderVisitor.Com
             return queryComponentHolder.getPipelineAggregationBuilders().getLast().getName();
         }
 
-        // Otherwise, return the unfold aggregation reference
-        return queryComponentHolder.getId() + AggregationConstants.BUCKETS_PATH_SEPARATOR + queryComponentHolder
-            .getUnfoldAggregationBuilder()
-            .getName();
+        // If there's an unfold aggregation, return its reference
+        if (queryComponentHolder.getUnfoldAggregationBuilder() != null) {
+            return queryComponentHolder.getId() + AggregationConstants.BUCKETS_PATH_SEPARATOR + queryComponentHolder
+                .getUnfoldAggregationBuilder()
+                .getName();
+        }
+
+        // For MockFetch with filter parent containing coordinator: {filterId}>{coordinatorId}
+        if (!queryComponentHolder.getFilterAggregationBuilders().isEmpty()) {
+            // The filter contains the coordinator as a sub-aggregation
+            return queryComponentHolder.getId() + AggregationConstants.BUCKETS_PATH_SEPARATOR + queryComponentHolder.getId()
+                + COORDINATOR_NAME_SUFFIX;
+        }
+
+        throw new IllegalStateException("Cannot determine terminal reference for component holder " + queryComponentHolder.getId());
     }
 
     private TimeRange getAdjustedFetchTimeRange() {
@@ -1130,6 +1193,7 @@ public class SourceBuilderVisitor extends M3PlanVisitor<SourceBuilderVisitor.Com
             if (unfoldAggregationBuilder != null) {
                 searchSourceBuilder.aggregation(unfoldAggregationBuilder);
             }
+
             for (FilterAggregationBuilder filterAgg : filterAggregationBuilders) {
                 searchSourceBuilder.aggregation(filterAgg);
             }

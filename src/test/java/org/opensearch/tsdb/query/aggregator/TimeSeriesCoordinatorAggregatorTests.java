@@ -13,7 +13,6 @@ import org.opensearch.search.aggregations.pipeline.PipelineAggregator;
 import org.opensearch.test.OpenSearchTestCase;
 import org.opensearch.tsdb.core.model.ByteLabels;
 import org.opensearch.tsdb.core.model.FloatSample;
-import org.opensearch.tsdb.lang.m3.stage.ScaleStage;
 import org.opensearch.tsdb.query.stage.PipelineStage;
 
 import java.util.Collections;
@@ -27,14 +26,17 @@ import java.util.Map;
 public class TimeSeriesCoordinatorAggregatorTests extends OpenSearchTestCase {
 
     /**
-     * doReduce with no references yields empty result; the branch that skips
-     * circuit breaker tracking for empty result (result != null && !result.isEmpty())
-     * is covered.
+     * doReduce with no stages and empty aggregations yields empty result.
+     * This covers the circuit breaker code path that checks for empty results
+     * (result != null && !result.isEmpty()).
+
      */
     public void testDoReduceWithEmptyResultReleasesConsumerAndReturnsEmptyTimeSeries() {
-        List<PipelineStage> stages = List.of(new ScaleStage(2.0));
+        // No stages and no references - yields empty result
+        List<PipelineStage> stages = Collections.emptyList();
         Map<String, String> references = Collections.emptyMap();
-        String inputReference = "a";
+        String inputReference = null;
+
         TimeSeriesCoordinatorAggregator aggregator = new TimeSeriesCoordinatorAggregator(
             "test_empty_result",
             new String[0],

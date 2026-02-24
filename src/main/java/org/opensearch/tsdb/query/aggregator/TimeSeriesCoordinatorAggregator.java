@@ -304,10 +304,12 @@ public class TimeSeriesCoordinatorAggregator extends SiblingPipelineAggregator {
                 );
             }
             resultTimeSeries = availableReferences.get(inputReference);
-
-            // Apply main pipeline stages sequentially with circuit breaker tracking
-            resultTimeSeries = executeStages(stages, resultTimeSeries, availableReferences, cbConsumer);
         }
+
+        // Apply main pipeline stages sequentially with circuit breaker tracking
+        // When availableReferences is empty (e.g., MockFetch), resultTimeSeries starts as null
+        // and the first stage (MockFetchStage) generates data from scratch
+        resultTimeSeries = executeStages(stages, resultTimeSeries, availableReferences, cbConsumer);
         return resultTimeSeries != null ? resultTimeSeries : List.of();
     }
 
