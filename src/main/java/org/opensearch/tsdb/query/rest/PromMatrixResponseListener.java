@@ -46,10 +46,10 @@ import static org.opensearch.tsdb.metrics.TSDBMetricsConstants.NANOS_PER_MILLI;
  *     "result": [
  *       {
  *         "metric": {
- *           "__name__": "metric_name",
  *           "label1": "value1",
  *           "label2": "value2"
  *         },
+ *         "alias": "metric_name",
  *         "values": [
  *           [timestamp1, "value1"],
  *           [timestamp2, "value2"]
@@ -101,9 +101,6 @@ public class PromMatrixResponseListener extends RestToXContentListener<SearchRes
     // Response type values
     private static final String RESULT_TYPE_MATRIX = "matrix";
 
-    // Prometheus label names
-    private static final String LABEL_NAME = "__name__";
-
     // Aggregator name for profile extraction
     private static final String TIME_SERIES_UNFOLD_AGGREGATOR_NAME = TimeSeriesUnfoldAggregator.class.getSimpleName();
 
@@ -112,6 +109,8 @@ public class PromMatrixResponseListener extends RestToXContentListener<SearchRes
     private final boolean profile;
 
     private final boolean includeMetadata;
+
+    private final boolean includeAlias;
 
     private final long startTimeNanos;
 
@@ -141,10 +140,17 @@ public class PromMatrixResponseListener extends RestToXContentListener<SearchRes
      * @param finalAggregationName the name of the final aggregation to extract (must not be null)
      * @param profile whether to include profiling information in the response
      * @param includeMetadata whether to include metadata fields (step, start, end) in each time series
+     * @param includeAlias whether to include the alias field in each time series
      * @throws NullPointerException if finalAggregationName is null
      */
-    public PromMatrixResponseListener(RestChannel channel, String finalAggregationName, boolean profile, boolean includeMetadata) {
-        this(channel, finalAggregationName, profile, includeMetadata, null);
+    public PromMatrixResponseListener(
+        RestChannel channel,
+        String finalAggregationName,
+        boolean profile,
+        boolean includeMetadata,
+        boolean includeAlias
+    ) {
+        this(channel, finalAggregationName, profile, includeMetadata, includeAlias, null);
     }
 
     /**
@@ -154,6 +160,7 @@ public class PromMatrixResponseListener extends RestToXContentListener<SearchRes
      * @param finalAggregationName the name of the final aggregation to extract (must not be null)
      * @param profile whether to include profiling information in the response
      * @param includeMetadata whether to include metadata fields (step, start, end) in each time series
+     * @param includeAlias whether to include the alias field in each time series
      * @param queryMetrics container for query execution metrics (can be null)
      * @throws NullPointerException if finalAggregationName is null
      */
@@ -162,12 +169,14 @@ public class PromMatrixResponseListener extends RestToXContentListener<SearchRes
         String finalAggregationName,
         boolean profile,
         boolean includeMetadata,
+        boolean includeAlias,
         QueryMetrics queryMetrics
     ) {
         super(channel);
         this.finalAggregationName = Objects.requireNonNull(finalAggregationName, "finalAggregationName cannot be null");
         this.profile = profile;
         this.includeMetadata = includeMetadata;
+        this.includeAlias = includeAlias;
         this.startTimeNanos = System.nanoTime();
         this.queryMetrics = queryMetrics;
     }
@@ -218,7 +227,12 @@ public class PromMatrixResponseListener extends RestToXContentListener<SearchRes
         builder.field(FIELD_RESULT_TYPE, RESULT_TYPE_MATRIX);
         builder.field(
             FIELD_RESULT,
-            TimeSeriesOutputMapper.extractAndTransformToPromMatrix(response.getAggregations(), finalAggregationName, includeMetadata)
+            TimeSeriesOutputMapper.extractAndTransformToPromMatrix(
+                response.getAggregations(),
+                finalAggregationName,
+                includeMetadata,
+                includeAlias
+            )
         );
         builder.endObject();
 

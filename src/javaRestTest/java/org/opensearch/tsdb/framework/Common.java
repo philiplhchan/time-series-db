@@ -29,6 +29,7 @@ public final class Common {
     public static final String FIELD_RESULT = "result";
     public static final String FIELD_METRIC = "metric";
     public static final String FIELD_VALUES = "values";
+    public static final String FIELD_ALIAS = "alias";
 
     // Error Messages
     public static final String UNKNOWN_ERROR = "Unknown error";

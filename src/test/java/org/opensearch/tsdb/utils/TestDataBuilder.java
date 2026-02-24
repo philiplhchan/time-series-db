@@ -65,7 +65,7 @@ public final class TestDataBuilder {
     }
 
     /**
-     * Creates a time series with an alias (sets the __name__ label).
+     * Creates a time series with an alias.
      *
      * @return list containing one time series with an alias
      */

@@ -26,6 +26,7 @@ import org.opensearch.tsdb.query.utils.TimeSeriesOutputMapper.TimeSeriesResult;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import static org.opensearch.tsdb.framework.Common.FIELD_ALIAS;
 import static org.opensearch.tsdb.framework.Common.FIELD_DATA;
 import static org.opensearch.tsdb.framework.Common.FIELD_METRIC;
 import static org.opensearch.tsdb.framework.Common.FIELD_QUERY;
@@ -220,6 +221,7 @@ public class RestQueryExecutor extends BaseQueryExecutor {
         List<TimeSeriesResult> timeSeriesResults = new ArrayList<>(resultList.size());
         for (Map<String, Object> resultItem : resultList) {
             Map<String, String> metric = (Map<String, String>) resultItem.get(FIELD_METRIC);
+            String alias = (String) resultItem.get(FIELD_ALIAS);
             List<List<Object>> values = (List<List<Object>>) resultItem.get(FIELD_VALUES);
 
             if (metric == null) {
@@ -229,7 +231,7 @@ public class RestQueryExecutor extends BaseQueryExecutor {
                 throw new IOException(String.format(Locale.ROOT, "Result item missing 'values' field for metric: %s", metric));
             }
 
-            timeSeriesResults.add(new TimeSeriesResult(metric, values));
+            timeSeriesResults.add(new TimeSeriesResult(metric, alias, values));
         }
 
         return new PromMatrixResponse(status, new PromMatrixData(timeSeriesResults));

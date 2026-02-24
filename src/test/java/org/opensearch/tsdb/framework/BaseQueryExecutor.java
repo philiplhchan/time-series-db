@@ -92,7 +92,7 @@ public abstract class BaseQueryExecutor {
     /**
      * Validate query response against expected Prometheus matrix format.
      * Validates both response structure (series count) and data content (metrics and values).
-     * When alias is specified, includes __name__ in metric matching logic.
+     * When alias is specified, validates alias separately from metric labels.
      *
      * @param query The query configuration containing expected response
      * @param actualResponse The actual response from query execution
@@ -141,18 +141,9 @@ public abstract class BaseQueryExecutor {
                 }
             }
 
-            // Reject explicit __name__ tags to avoid conflicts with alias functionality
-            if (expectedData.metric().containsKey("__name__")) {
-                throw new IllegalArgumentException("Explicit __name__ tag is not allowed in test data. Use 'alias' field instead.");
-            }
-
-            // When alias is specified, include __name__ in the metric labels for matching
             Map<String, String> metricLabels = new HashMap<>(expectedData.metric());
-            if (expectedData.alias() != null) {
-                metricLabels.put("__name__", expectedData.alias());
-            }
 
-            results.add(new TimeSeriesResult(metricLabels, values));
+            results.add(new TimeSeriesResult(metricLabels, expectedData.alias(), values));
         }
 
         return new PromMatrixResponse(expected.status(), new PromMatrixData(results));
@@ -184,6 +175,12 @@ public abstract class BaseQueryExecutor {
             TimeSeriesResult actualResult = actualMap.get(metric);
 
             assertNotNull(String.format(Locale.ROOT, "%s: Missing metric %s", queryName, metric), actualResult);
+
+            assertEquals(
+                String.format(Locale.ROOT, "%s: Alias mismatch for metric %s", queryName, metric),
+                expectedResult.alias(),
+                actualResult.alias()
+            );
 
             assertEquals(
                 String.format(Locale.ROOT, "%s: Values mismatch for metric %s", queryName, metric),

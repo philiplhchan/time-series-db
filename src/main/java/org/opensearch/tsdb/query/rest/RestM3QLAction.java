@@ -261,6 +261,7 @@ public class RestM3QLAction extends BaseTSDBAction {
                                 finalAggName,
                                 params.profile,
                                 params.includeMetadata,
+                                true,
                                 new PromMatrixResponseListener.QueryMetrics(
                                     METRICS.executionLatency,
                                     METRICS.collectPhaseLatencyMax,
