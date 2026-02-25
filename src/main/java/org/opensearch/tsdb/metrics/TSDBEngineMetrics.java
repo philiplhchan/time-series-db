@@ -79,6 +79,21 @@ public class TSDBEngineMetrics {
     /** Counter for total number of translog readers */
     public Counter translogReadersCount;
 
+    /** Counter: samples successfully appended to storage */
+    public Counter samplesAppended;
+
+    /** Counter: samples rejected (tagged by reason) */
+    public Counter samplesFailed;
+
+    /** Counter: samples dropped during OOO dedup at flush */
+    public Counter samplesDeduped;
+
+    public Closeable headSampleCountGauge;
+    public Closeable persistedSampleCountGauge;
+
+    /** Gauge handle for shard size bytes */
+    public Closeable shardSizeBytesGauge;
+
     /**
      * Initialize engine metrics with basic counters and histograms.
      *
@@ -186,6 +201,22 @@ public class TSDBEngineMetrics {
             TSDBMetricsConstants.TRANSLOG_READERS_COUNT_DESC,
             TSDBMetricsConstants.UNIT_COUNT
         );
+
+        samplesAppended = registry.createCounter(
+            TSDBMetricsConstants.ENGINE_SAMPLES_APPENDED,
+            TSDBMetricsConstants.ENGINE_SAMPLES_APPENDED_DESC,
+            TSDBMetricsConstants.UNIT_COUNT
+        );
+        samplesFailed = registry.createCounter(
+            TSDBMetricsConstants.ENGINE_SAMPLES_FAILED,
+            TSDBMetricsConstants.ENGINE_SAMPLES_FAILED_DESC,
+            TSDBMetricsConstants.UNIT_COUNT
+        );
+        samplesDeduped = registry.createCounter(
+            TSDBMetricsConstants.FLUSH_SAMPLES_DEDUPED,
+            TSDBMetricsConstants.FLUSH_SAMPLES_DEDUPED_DESC,
+            TSDBMetricsConstants.UNIT_COUNT
+        );
     }
 
     /**
@@ -240,20 +271,69 @@ public class TSDBEngineMetrics {
         );
     }
 
+    /**
+     * Register shard-level gauge metrics.
+     */
+    public void registerShardGauges(
+        MetricsRegistry registry,
+        Supplier<Double> headSampleCountSupplier,
+        Supplier<Double> persistedSampleCountSupplier,
+        Supplier<Double> sizeBytesSupplier,
+        Tags tags
+    ) {
+        if (registry == null) {
+            return;
+        }
+
+        headSampleCountGauge = registry.createGauge(
+            TSDBMetricsConstants.HEAD_SAMPLE_COUNT,
+            TSDBMetricsConstants.HEAD_SAMPLE_COUNT_DESC,
+            TSDBMetricsConstants.UNIT_COUNT,
+            headSampleCountSupplier,
+            tags
+        );
+
+        persistedSampleCountGauge = registry.createGauge(
+            TSDBMetricsConstants.PERSISTED_SAMPLE_COUNT,
+            TSDBMetricsConstants.PERSISTED_SAMPLE_COUNT_DESC,
+            TSDBMetricsConstants.UNIT_COUNT,
+            persistedSampleCountSupplier,
+            tags
+        );
+
+        shardSizeBytesGauge = registry.createGauge(
+            TSDBMetricsConstants.SHARD_SIZE_BYTES,
+            TSDBMetricsConstants.SHARD_SIZE_BYTES_DESC,
+            TSDBMetricsConstants.UNIT_BYTES,
+            sizeBytesSupplier,
+            tags
+        );
+    }
+
     public void cleanup() {
         // Close gauge handles first (important to unregister callbacks)
         closeQuietly(seriesOpenGauge);
         closeQuietly(memChunksMinSeqGauge);
         closeQuietly(memChunksOpenGauge);
+        closeQuietly(headSampleCountGauge);
+        closeQuietly(persistedSampleCountGauge);
+        closeQuietly(shardSizeBytesGauge);
 
         seriesOpenGauge = null;
         memChunksMinSeqGauge = null;
         memChunksOpenGauge = null;
+        headSampleCountGauge = null;
+        persistedSampleCountGauge = null;
+        shardSizeBytesGauge = null;
 
         // Cleanup ingestion counters
         samplesIngested = null;
         seriesCreated = null;
         memChunksCreated = null;
+
+        samplesAppended = null;
+        samplesFailed = null;
+        samplesDeduped = null;
 
         // Cleanup lifecycle counters
         seriesClosedTotal = null;

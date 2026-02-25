@@ -35,6 +35,7 @@ import org.opensearch.tsdb.core.index.ReaderManagerWithMetadata;
 import org.opensearch.tsdb.core.model.Labels;
 import org.opensearch.tsdb.core.retention.Retention;
 import org.opensearch.tsdb.core.utils.Time;
+import org.opensearch.telemetry.metrics.tags.Tags;
 import org.opensearch.tsdb.metrics.TSDBMetrics;
 
 import java.io.Closeable;
@@ -54,6 +55,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
@@ -110,6 +112,8 @@ public class ClosedChunkIndexManager implements Closeable {
     // Duration of each block
     private final long blockDuration;
     private final AtomicBoolean isClosed = new AtomicBoolean(false);
+    private final AtomicLong persistedSampleCount = new AtomicLong(0);
+    private volatile Tags metricTags;
 
     /**
      * Constructor for ClosedChunkIndexManager
@@ -151,6 +155,7 @@ public class ClosedChunkIndexManager implements Closeable {
         closedChunkIndexMap = new TreeMap<>();
         pendingChunksToSeriesMMapTimestamps = new HashMap<>();
         openClosedChunkIndexes(this.dir);
+        initPersistedSampleCount();
         mgmtTaskScheduler = threadPool.scheduleWithFixedDelay(
             this::runOptimization,
             TimeValue.timeValueMinutes(1),
@@ -164,6 +169,22 @@ public class ClosedChunkIndexManager implements Closeable {
     }
 
     /**
+     * Sets the metric tags (index, shard) for counter metrics emitted by this manager.
+     *
+     * @param tags metric tags
+     */
+    public void setMetricTags(Tags tags) {
+        this.metricTags = tags;
+    }
+
+    /**
+     * @return total sample count across all closed chunk indexes
+     */
+    public long getPersistedSampleCount() {
+        return persistedSampleCount.get();
+    }
+
+    /**
      * Ensures the manager is still open.
      * @throws AlreadyClosedException if the manager has been closed
      */
@@ -171,6 +192,14 @@ public class ClosedChunkIndexManager implements Closeable {
         if (this.isClosed.get()) {
             throw new AlreadyClosedException("ClosedChunkIndexManager is closed");
         }
+    }
+
+    private void initPersistedSampleCount() {
+        long total = 0;
+        for (ClosedChunkIndex index : closedChunkIndexMap.values()) {
+            total += index.getTotalSampleCount();
+        }
+        persistedSampleCount.set(total);
     }
 
     // visible for testing.
@@ -188,6 +217,7 @@ public class ClosedChunkIndexManager implements Closeable {
 
                 for (ClosedChunkIndex closedChunkIndex : candidates) {
                     try {
+                        long blockSampleCount = closedChunkIndex.getTotalSampleCount();
                         remove(closedChunkIndex);
                         pendingClosureIndexes.add(closedChunkIndex);
                         var removed = closeIndexes(Set.of(closedChunkIndex));
@@ -195,6 +225,9 @@ public class ClosedChunkIndexManager implements Closeable {
                             org.opensearch.tsdb.core.utils.Files.deleteDirectory(closedChunkIndex.getPath().toAbsolutePath());
                             pendingClosureIndexes.removeAll(removed);
                             TSDBMetrics.incrementCounter(TSDBMetrics.INDEX.retentionSuccessTotal, removed.size());
+                            if (blockSampleCount > 0) {
+                                persistedSampleCount.addAndGet(-blockSampleCount);
+                            }
                         }
                     } catch (Exception e) {
                         log.error("Failed to remove index", e);
@@ -340,11 +373,16 @@ public class ClosedChunkIndexManager implements Closeable {
             return null; // Signal that no new index was created
         }
 
+        long totalSamples = 0;
+        for (ClosedChunkIndex srcIndex : plan) {
+            totalSamples += srcIndex.getMetadata().stats().sampleCount();
+        }
+
         // Traditional compaction - multiple sources merged into new destination
         var minTime = Time.toTimestamp(plan.getFirst().getMinTime(), resolution);
         var maxTime = Time.toTimestamp(plan.getLast().getMaxTime(), resolution);
         var dirName = String.join("_", BLOCK_PREFIX, Long.toString(minTime), Long.toString(maxTime), UUIDs.base64UUID());
-        var metadata = new ClosedChunkIndex.Metadata(dirName, minTime, maxTime);
+        var metadata = new ClosedChunkIndex.Metadata(dirName, minTime, maxTime, new ClosedChunkIndex.Stats(totalSamples));
 
         // Create an index with serial scheduler to make it less compute expensive.
         ClosedChunkIndex newIndex = new ClosedChunkIndex(
@@ -354,11 +392,13 @@ public class ClosedChunkIndexManager implements Closeable {
             new SerialMergeScheduler(),
             indexSettings
         );
+
         compaction.compact(plan, newIndex);
 
         // Close the index and re-create with the default scheduler.
         newIndex.close();
         newIndex = new ClosedChunkIndex(dir.resolve(dirName), metadata, resolution, indexSettings);
+
         log.info(
             "Compaction took: {} s, original size: {} bytes, compacted size: {} bytes",
             Duration.between(start, Instant.now()).toSeconds(),
@@ -385,16 +425,16 @@ public class ClosedChunkIndexManager implements Closeable {
         var newMap = new TreeMap<Long, ClosedChunkIndex>();
         var indexMetadata = new ArrayList<String>();
         newMap.put(Time.toTimestamp(replacedIndexes.getLast().getMaxTime(), resolution), replacementIndex);
-        indexMetadata.add(replacementIndex.getMetadata().marshal());
 
         lock.lock();
         try {
+            indexMetadata.add(marshalWithCurrentStats(replacementIndex));
             for (ClosedChunkIndex closedChunkIndex : closedChunkIndexMap.values()) {
                 if (replacedIndexes.contains(closedChunkIndex)) {
                     continue;
                 }
                 newMap.put(Time.toTimestamp(closedChunkIndex.getMaxTime(), resolution), closedChunkIndex);
-                indexMetadata.add(closedChunkIndex.getMetadata().marshal());
+                indexMetadata.add(marshalWithCurrentStats(closedChunkIndex));
             }
 
             try (XContentBuilder builder = XContentFactory.jsonBuilder()) {
@@ -407,6 +447,19 @@ public class ClosedChunkIndexManager implements Closeable {
         } finally {
             lock.unlock();
         }
+    }
+
+    /**
+     * Marshal index metadata with the current sample count.
+     */
+    private String marshalWithCurrentStats(ClosedChunkIndex index) throws IOException {
+        ClosedChunkIndex.Metadata meta = index.getMetadata();
+        return new ClosedChunkIndex.Metadata(
+            meta.directoryName(),
+            meta.minTimestamp(),
+            meta.maxTimestamp(),
+            new ClosedChunkIndex.Stats(index.getTotalSampleCount())
+        ).marshal();
     }
 
     private Set<ClosedChunkIndex> closeIndexes(Set<ClosedChunkIndex> indexes) throws InterruptedException {
@@ -576,7 +629,14 @@ public class ClosedChunkIndexManager implements Closeable {
                 return false;
             }
 
-            closedChunkIndex.addNewChunk(labels, chunk);
+            int rawSamples = chunk.getCompoundChunk().rawSampleCount();
+            int samplesDeduped = closedChunkIndex.addNewChunk(labels, chunk);
+            int postDedupSamples = rawSamples - samplesDeduped;
+            persistedSampleCount.addAndGet(postDedupSamples);
+            if (samplesDeduped > 0) {
+                TSDBMetrics.incrementCounter(TSDBMetrics.ENGINE.samplesDeduped, samplesDeduped, metricTags);
+            }
+
             // mark the max mmap timestamp for the series, so we can later update the series at the correct time
             pendingChunksToSeriesMMapTimestamps.computeIfAbsent(closedChunkIndex, k -> new HashMap<>())
                 .compute(series, (MemSeries s, Long existingValue) -> {
@@ -634,7 +694,8 @@ public class ClosedChunkIndexManager implements Closeable {
             List<String> indexMetadata = new ArrayList<>();
             // commit in ascending order, using closedChunkIndexMap rather than pendingChunksToSeriesMMapTimestamps.keySet()
             for (ClosedChunkIndex index : closedChunkIndexMap.values()) {
-                indexMetadata.add(index.getMetadata().marshal());
+                indexMetadata.add(marshalWithCurrentStats(index));
+
                 Map<MemSeries, Long> pendingSeriesMMapTimestamps = pendingChunksToSeriesMMapTimestamps.get(index);
                 if (pendingSeriesMMapTimestamps == null) {
                     continue;

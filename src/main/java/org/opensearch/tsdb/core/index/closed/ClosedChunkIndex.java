@@ -57,6 +57,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiConsumer;
 import java.util.stream.Stream;
 
@@ -73,6 +74,7 @@ public class ClosedChunkIndex implements Closeable {
     private final TimeUnit resolution;
     private final LabelStorageType labelStorageType;
     private final SeriesMetadataManager metadataManager;
+    private final AtomicLong pendingSampleCount = new AtomicLong(0);
     private IndexWriter indexWriter;
 
     /**
@@ -135,11 +137,15 @@ public class ClosedChunkIndex implements Closeable {
      *
      * @param labels   the Labels for the series
      * @param memChunk the MemChunk to add
+     * @return the number of samples dropped during OOO deduplication (0 if no dedup occurred)
      * @throws IOException if there is an error adding the chunk
      */
-    public void addNewChunk(Labels labels, MemChunk memChunk) throws IOException {
+    public int addNewChunk(Labels labels, MemChunk memChunk) throws IOException {
+        // compoundChunk cannot change between rawSampleCount() and toChunk() — we hold the index writer lock
+        int rawSampleCount = memChunk.getCompoundChunk().rawSampleCount();
         // Convert MemChunk to Chunk once and reuse for both serialization and metrics
         Chunk chunk = memChunk.getCompoundChunk().toChunk();
+        int samplesDeduped = rawSampleCount - chunk.numSamples();
 
         Document doc = new Document();
         doc.add(new NumericDocValuesField(Constants.IndexSchema.LABELS_HASH, labels.stableHash()));
@@ -170,8 +176,31 @@ public class ClosedChunkIndex implements Closeable {
 
         indexWriter.addDocument(doc);
 
+        pendingSampleCount.addAndGet(chunk.numSamples());
+
         // Record closed chunk size
         TSDBMetrics.recordHistogram(TSDBMetrics.ENGINE.closedChunkSize, chunk.bytesSize());
+
+        return samplesDeduped;
+    }
+
+    /**
+     * Returns the accumulated sample count for this index (pending persistence).
+     *
+     * @return the number of samples accumulated since creation or last reset
+     */
+    public long getPendingSampleCount() {
+        return pendingSampleCount.get();
+    }
+
+    /**
+     * Returns the total sample count for this index: persisted metadata stats plus
+     * any samples accumulated since the last commit.
+     *
+     * @return total sample count (persisted + pending)
+     */
+    public long getTotalSampleCount() {
+        return metadata.stats().sampleCount() + pendingSampleCount.get();
     }
 
     /**
@@ -254,6 +283,8 @@ public class ClosedChunkIndex implements Closeable {
         commitWithMetadata(metadata);
     }
 
+    static final String COMMIT_DATA_SAMPLE_COUNT_KEY = "stats.sample_count";
+
     /**
      * Commit the live series metadata map including seriesRef and corresponding max mmap timestamps.
      *
@@ -261,7 +292,7 @@ public class ClosedChunkIndex implements Closeable {
      */
     public void commitWithMetadata(Map<Long, Long> liveSeries) {
         try {
-            metadataManager.commitWithMetadata(liveSeries);
+            metadataManager.commitWithMetadata(liveSeries, Map.of(COMMIT_DATA_SAMPLE_COUNT_KEY, Long.toString(getTotalSampleCount())));
         } catch (IOException e) {
             throw new RuntimeException("Failed to commit with metadata", e);
         }
@@ -390,25 +421,47 @@ public class ClosedChunkIndex implements Closeable {
     }
 
     /**
+     * Block-level statistics. Fields are additive — absent fields default to zero on deserialization,
+     * so future stats (num_series, num_chunks, etc.) can be added without a version bump.
+     *
+     * @param sampleCount number of samples in this block
+     */
+    public record Stats(long sampleCount) {
+        /** Default stats with all fields at zero. */
+        public static final Stats EMPTY = new Stats(0);
+    }
+
+    /**
      * A record class to store index metadata.
      *
      * @param directoryName name of the directory backing the index.
      * @param minTimestamp  min timestamp of the index
      * @param maxTimestamp  max timestamp of the index
+     * @param stats         block-level statistics
      */
-    public record Metadata(String directoryName, long minTimestamp, long maxTimestamp) {
+    public record Metadata(String directoryName, long minTimestamp, long maxTimestamp, Stats stats) {
+
+        /** Backward-compatible constructor for v1 metadata (no stats). */
+        public Metadata(String directoryName, long minTimestamp, long maxTimestamp) {
+            this(directoryName, minTimestamp, maxTimestamp, Stats.EMPTY);
+        }
+
         public String marshal() throws IOException {
             try (XContentBuilder builder = XContentFactory.jsonBuilder()) {
                 builder.startObject();
-                builder.field("version", 1);
+                builder.field("version", 2);
                 builder.field("directory_name", directoryName);
                 builder.field("min_timestamp", minTimestamp);
                 builder.field("max_timestamp", maxTimestamp);
+                builder.startObject("stats");
+                builder.field("sample_count", stats.sampleCount());
+                builder.endObject();
                 builder.endObject();
                 return builder.toString();
             }
         }
 
+        @SuppressWarnings("unchecked")
         public static Metadata unmarshal(String value) {
             try (
                 var parser = MediaTypeRegistry.JSON.xContent()
@@ -419,13 +472,38 @@ public class ClosedChunkIndex implements Closeable {
                     )
             ) {
                 Map<String, Object> map = parser.map();
+                if (!map.containsKey("version")) {
+                    throw new IllegalStateException("Metadata missing required 'version' field");
+                }
+                int version = ((Number) map.get("version")).intValue();
                 String directoryName = (String) map.get("directory_name");
                 long minTimestamp = ((Number) map.get("min_timestamp")).longValue();
                 long maxTimestamp = ((Number) map.get("max_timestamp")).longValue();
-                return new Metadata(directoryName, minTimestamp, maxTimestamp);
+
+                Stats stats = switch (version) {
+                    case 1 -> Stats.EMPTY;
+                    case 2 -> parseStatsV2(map);
+                    default -> throw new IllegalStateException("Unrecognized metadata version: " + version);
+                };
+
+                return new Metadata(directoryName, minTimestamp, maxTimestamp, stats);
             } catch (IOException e) {
                 throw new RuntimeException("Failed to deserialize Metadata", e);
             }
+        }
+
+        @SuppressWarnings("unchecked")
+        private static Stats parseStatsV2(Map<String, Object> map) {
+            Object statsObj = map.get("stats");
+            if (!(statsObj instanceof Map)) {
+                return Stats.EMPTY;
+            }
+            Map<String, Object> statsMap = (Map<String, Object>) statsObj;
+            if (!statsMap.containsKey("sample_count")) {
+                throw new IllegalStateException("v2 stats missing required 'sample_count' field");
+            }
+            long sampleCount = ((Number) statsMap.get("sample_count")).longValue();
+            return new Stats(sampleCount);
         }
     }
 }

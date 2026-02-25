@@ -60,6 +60,7 @@ import org.opensearch.tsdb.core.reader.TSDBDirectoryReaderReferenceManager;
 import org.opensearch.tsdb.core.retention.RetentionFactory;
 import org.opensearch.tsdb.core.utils.RateLimitedLock;
 import org.opensearch.tsdb.metrics.TSDBMetrics;
+import org.opensearch.tsdb.metrics.TSDBMetricsConstants;
 import org.opensearch.tsdb.TSDBPlugin;
 import org.opensearch.core.index.shard.ShardId;
 
@@ -132,6 +133,11 @@ public class TSDBEngine extends Engine {
     private volatile int maxCloseableChunksPerChunkRangePercentage; // controls the percentage of chunks closed per chunk range
 
     private final Tags metricTags; // tags for metrics (index name and shard ID)
+    private final Tags samplesAppendTags;
+    private final Tags samplesRecoveryTags;
+
+    private final AtomicLong headSampleCount = new AtomicLong(0);
+
     private Head head;
     private Path metricsStorePath;
     private TSDBDirectoryReaderReferenceManager tsdbReaderManager;
@@ -165,10 +171,18 @@ public class TSDBEngine extends Engine {
             engineConfig.getIndexSettings().getSettings()
         );
 
-        // Initialize metric tags for this shard
-        this.metricTags = Tags.create()
-            .addTag("index", engineConfig.getShardId().getIndexName())
-            .addTag("shard", (long) engineConfig.getShardId().getId());
+        String indexName = engineConfig.getShardId().getIndexName();
+        long shardNum = engineConfig.getShardId().getId();
+
+        this.metricTags = Tags.create().addTag("index", indexName).addTag("shard", shardNum);
+        this.samplesAppendTags = Tags.create()
+            .addTag("index", indexName)
+            .addTag("shard", shardNum)
+            .addTag(TSDBMetricsConstants.TAG_ORIGIN, TSDBMetricsConstants.TAG_ORIGIN_INGESTION);
+        this.samplesRecoveryTags = Tags.create()
+            .addTag("index", indexName)
+            .addTag("shard", shardNum)
+            .addTag(TSDBMetricsConstants.TAG_ORIGIN, TSDBMetricsConstants.TAG_ORIGIN_RECOVERY);
 
         // Initialize rate-limited translog deletion policy with metric tags
         this.rateLimitedTranslogDeletionPolicy = new RateLimitedTranslogDeletionPolicy(
@@ -216,6 +230,9 @@ public class TSDBEngine extends Engine {
                 engineConfig.getShardId(),
                 engineConfig.getIndexSettings().getSettings()
             );
+
+            closedChunkIndexManager.setMetricTags(metricTags);
+
             head = new Head(
                 metricsStorePath,
                 engineConfig.getShardId(),
@@ -423,6 +440,7 @@ public class TSDBEngine extends Engine {
 
         // TODO: delete this once OOO is supported
         boolean emptyLabelExceptionEncountered = false;
+        boolean appended = false;
 
         try {
             context.isNewSeriesCreated = appender.preprocess(
@@ -436,7 +454,7 @@ public class TSDBEngine extends Engine {
             );
 
             // preprocess succeeded, now call append
-            appender.append(
+            appended = appender.append(
                 () -> writeIndexingOperationToTranslog(indexOp, seriesReference, metricDocument, context),
                 () -> writeNoopOperationToTranslog(indexOp, context)
             );
@@ -444,13 +462,27 @@ public class TSDBEngine extends Engine {
             // TODO: delete this once OOO is supported
             logger.error("Encountered empty label exception, operation origin " + indexOp.origin().name(), e);
             emptyLabelExceptionEncountered = true;
+            incrementSamplesFailed(indexOp.origin(), TSDBMetricsConstants.TAG_REASON_EMPTY_LABELS);
         } catch (TSDBOutOfOrderException e) {
             // OOO sample rejected - expected failure, do not log as error
             logger.debug("Sample rejected due to OOO cutoff, writing NoOp to translog, operation origin " + indexOp.origin().name(), e);
             context.failureException = e;
+            incrementSamplesFailed(indexOp.origin(), TSDBMetricsConstants.TAG_REASON_OOO_REJECTED);
         } catch (Exception e) {
             logger.error("Index operation failed during preprocess or append, operation origin " + indexOp.origin().name(), e);
             context.failureException = e;
+            incrementSamplesFailed(
+                indexOp.origin(),
+                (e instanceof TSDBTragicException) ? TSDBMetricsConstants.TAG_REASON_TRAGIC : TSDBMetricsConstants.TAG_REASON_OTHER
+            );
+        }
+
+        if (appended) {
+            headSampleCount.incrementAndGet();
+            Tags tags = indexOp.origin() == Operation.Origin.PRIMARY || indexOp.origin() == Operation.Origin.REPLICA
+                ? samplesAppendTags
+                : samplesRecoveryTags;
+            TSDBMetrics.incrementCounter(TSDBMetrics.ENGINE.samplesAppended, 1, tags);
         }
 
         // TODO: We ignore empty label exceptions temporarily. Delete this once OOO support is added.
@@ -797,6 +829,7 @@ public class TSDBEngine extends Engine {
                     long currentProcessedCheckpoint = localCheckpointTracker.getProcessedCheckpoint();
 
                     Head.IndexChunksResult indexChunksResult = head.closeHeadChunks(postRecoveryRefreshCompleted, closeableChunkPercentage);
+                    headSampleCount.addAndGet(-indexChunksResult.totalFlushedRawSamples());
                     long minSeqNo = indexChunksResult.minSeqNo();
                     long checkpoint = minSeqNo == Long.MAX_VALUE ? Long.MAX_VALUE : minSeqNo - 1;
 
@@ -1694,22 +1727,52 @@ public class TSDBEngine extends Engine {
      */
     private void registerHeadGauges() {
         if (!TSDBMetrics.isInitialized() || head == null) {
-            return; // Metrics not initialized or head not created yet
+            return;
         }
 
         final Head headRef = this.head;
 
-        TSDBMetrics.ENGINE.registerGauges(
+        TSDBMetrics.ENGINE.registerGauges(TSDBMetrics.getRegistry(), () -> (double) headRef.getNumSeries(), () -> {
+            long minSeq = headRef.getMinSeqNo();
+            return minSeq == Long.MAX_VALUE ? 0.0 : (double) minSeq;
+        }, () -> (double) headRef.getNumOpenChunks(), headRef.getMetricTags());
+
+        // TODO: Add a "role" tag (primary/replica) once EngineConfig exposes shard routing.
+        Tags shardGaugeTags = Tags.create()
+            .addTag("index", engineConfig.getShardId().getIndexName())
+            .addTag("shard", (long) engineConfig.getShardId().getId());
+
+        TSDBMetrics.ENGINE.registerShardGauges(
             TSDBMetrics.getRegistry(),
-            () -> (double) headRef.getNumSeries(),           // Current series count
+            () -> (double) headSampleCount.get(),
+            () -> (double) closedChunkIndexManager.getPersistedSampleCount(),
             () -> {
-                // Minimum sequence number - convert Long.MAX_VALUE to 0 for metrics
-                // (Long.MAX_VALUE is internal sentinel, not meaningful for observability)
-                long minSeq = headRef.getMinSeqNo();
-                return minSeq == Long.MAX_VALUE ? 0.0 : (double) minSeq;
+                try {
+                    return (double) store.stats(0L).getSizeInBytes();
+                } catch (Exception e) {
+                    return 0.0;
+                }
             },
-            () -> (double) headRef.getNumOpenChunks(),       // Current open chunks count
-            headRef.getMetricTags()
+            shardGaugeTags
         );
+    }
+
+    private void incrementSamplesFailed(Operation.Origin origin, String reason) {
+        TSDBMetrics.incrementCounter(
+            TSDBMetrics.ENGINE.samplesFailed,
+            1,
+            Tags.create()
+                .addTag("index", engineConfig.getShardId().getIndexName())
+                .addTag("shard", (long) engineConfig.getShardId().getId())
+                .addTag(TSDBMetricsConstants.TAG_ORIGIN, originTag(origin))
+                .addTag(TSDBMetricsConstants.TAG_REASON, reason)
+        );
+    }
+
+    private static String originTag(Operation.Origin origin) {
+        return switch (origin) {
+            case PRIMARY, REPLICA -> TSDBMetricsConstants.TAG_ORIGIN_INGESTION;
+            default -> TSDBMetricsConstants.TAG_ORIGIN_RECOVERY;
+        };
     }
 }
