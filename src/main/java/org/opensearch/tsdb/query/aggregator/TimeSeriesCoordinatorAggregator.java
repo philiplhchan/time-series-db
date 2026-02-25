@@ -256,6 +256,18 @@ public class TimeSeriesCoordinatorAggregator extends SiblingPipelineAggregator {
         // before this constructor is called
     }
 
+    /**
+     * Reduces aggregations from different shards by executing the main pipeline stages
+     * on the referenced time series inputs.
+     *
+     * <p>This method extracts time series from the referenced aggregations using their
+     * bucket paths, evaluates any macro definitions in dependency order, and then
+     * applies the main pipeline stages to produce the final result.</p>
+     *
+     * @param aggregations the shard-level aggregation results to reduce
+     * @param context the reduce context providing settings for partial or final reduction
+     * @return a new {@link InternalTimeSeries} containing the coordinator-level pipeline result
+     */
     @Override
     public InternalAggregation doReduce(Aggregations aggregations, ReduceContext context) {
         try (ReduceCircuitBreakerConsumer cbConsumer = ReduceCircuitBreakerConsumer.createConsumer(context)) {

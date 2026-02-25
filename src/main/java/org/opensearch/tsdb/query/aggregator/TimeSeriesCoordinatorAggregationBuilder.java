@@ -161,6 +161,12 @@ public class TimeSeriesCoordinatorAggregationBuilder extends AbstractPipelineAgg
         return macroDefinitions;
     }
 
+    /**
+     * Sets the metadata map for this aggregation builder.
+     *
+     * @param metadata the metadata to associate with this aggregation
+     * @return this builder instance for method chaining
+     */
     @Override
     public TimeSeriesCoordinatorAggregationBuilder setMetadata(Map<String, Object> metadata) {
         this.metadata = metadata;

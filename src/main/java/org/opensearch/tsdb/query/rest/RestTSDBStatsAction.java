@@ -168,6 +168,11 @@ public class RestTSDBStatsAction extends BaseTSDBAction {
     // Valid format options
     private static final Set<String> VALID_FORMAT_OPTIONS = new HashSet<>(Arrays.asList(FORMAT_TYPE_GROUPED, FORMAT_TYPE_FLAT));
 
+    /**
+     * Constructs a new {@code RestTSDBStatsAction} with the given cluster settings.
+     *
+     * @param clusterSettings the cluster settings used by the base action for dynamic configuration
+     */
     public RestTSDBStatsAction(ClusterSettings clusterSettings) {
         super(clusterSettings);
     }
@@ -319,6 +324,19 @@ public class RestTSDBStatsAction extends BaseTSDBAction {
         return null;
     }
 
+    /**
+     * Handles the incoming REST request by parsing parameters, validating the M3QL query,
+     * and returning a response channel consumer.
+     *
+     * <p>Accepts both GET (query via URL parameter) and POST (query via JSON body) requests.
+     * Validates that start time is before end time, include/format parameters are valid,
+     * and that the query contains a {@code fetch} expression with required label filters.</p>
+     *
+     * @param request the incoming REST request
+     * @param client the node client (not yet used; reserved for aggregation execution)
+     * @return a consumer that writes the response to the REST channel
+     * @throws IOException if reading the request body fails
+     */
     @Override
     protected RestChannelConsumer prepareRequest(RestRequest request, NodeClient client) throws IOException {
         // Parse ALL parameters first to avoid "unrecognized parameters" error

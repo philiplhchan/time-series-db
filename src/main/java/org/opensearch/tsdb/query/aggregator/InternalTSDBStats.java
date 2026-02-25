@@ -40,13 +40,30 @@ public class InternalTSDBStats extends InternalAggregation {
 
     /**
      * Statistics for the head (in-memory time series).
+     *
+     * @param numSeries the number of active time series in the head
+     * @param chunkCount the total number of memory chunks currently held
+     * @param minTime the minimum sample timestamp present in the head
+     * @param maxTime the maximum sample timestamp present in the head
      */
     public record HeadStats(long numSeries, long chunkCount, long minTime, long maxTime) {
 
+        /**
+         * Deserializes a {@code HeadStats} instance from a stream.
+         *
+         * @param in the stream input to read from
+         * @throws IOException if an I/O error occurs during reading
+         */
         public HeadStats(StreamInput in) throws IOException {
             this(in.readVLong(), in.readVLong(), in.readVLong(), in.readVLong());
         }
 
+        /**
+         * Serializes this {@code HeadStats} instance to a stream.
+         *
+         * @param out the stream output to write to
+         * @throws IOException if an I/O error occurs during writing
+         */
         public void writeTo(StreamOutput out) throws IOException {
             out.writeVLong(numSeries);
             out.writeVLong(chunkCount);

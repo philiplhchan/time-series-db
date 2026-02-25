@@ -175,7 +175,7 @@ public class DenseSampleContainer implements SampleContainer {
      *
      * @param sampleType      the type of samples to store (determines storage layout)
      * @param step            the fixed time interval between samples in milliseconds
-     * @param initialCapacity initialCapacity
+     * @param initialCapacity the initial number of time slots to pre-allocate in internal arrays
      * @throws NullPointerException if sampleType is null
      */
     public DenseSampleContainer(SampleType sampleType, long step, int initialCapacity) {

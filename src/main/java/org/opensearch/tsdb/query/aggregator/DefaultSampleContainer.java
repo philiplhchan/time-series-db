@@ -132,7 +132,7 @@ public class DefaultSampleContainer implements SampleContainer {
      *
      * @param sampleType      the type of samples this container will store
      * @param step            the fixed time interval between consecutive samples in milliseconds
-     * @param initialCapacity initialCapacity
+     * @param initialCapacity the initial capacity of the backing list to avoid early reallocations
      */
     public DefaultSampleContainer(SampleType sampleType, long step, int initialCapacity) {
         this.step = step;

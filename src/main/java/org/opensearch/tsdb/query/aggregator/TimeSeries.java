@@ -287,6 +287,11 @@ public class TimeSeries implements Accountable {
             + '}';
     }
 
+    /**
+     * Creates a deep copy of this time series, including independent copies of all samples and labels.
+     *
+     * @return a new {@link TimeSeries} with the same metadata but independently copied samples and labels
+     */
     public TimeSeries deepcopy() {
         List<Sample> newSamples = new ArrayList<>(samples.size());
         for (Sample sample : samples) {
