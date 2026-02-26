@@ -33,6 +33,9 @@ public interface SampleList extends Iterable<Sample>, Accountable {
     /** Shallow size of an ArrayList instance. */
     long ARRAYLIST_OVERHEAD = RamUsageEstimator.shallowSizeOfInstance(java.util.ArrayList.class);
 
+    /** Shallow size of a HashMap instance. */
+    long HASHMAP_OVERHEAD = RamUsageEstimator.shallowSizeOfInstance(java.util.HashMap.class);
+
     /**
      * Estimated size per Sample object in bytes.
      * With scalar replacement (common in hot paths): 16 bytes (8-byte timestamp + 8-byte value)

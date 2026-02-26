@@ -115,7 +115,7 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
         .addTag(TSDBMetricsConstants.TAG_STATUS, TSDBMetricsConstants.TAG_STATUS_HITS);
 
     private final List<UnaryPipelineStage> stages;
-    private final Map<Long, List<TimeSeries>> timeSeriesByBucket = new HashMap<>();
+    private final Map<Long, Map<Labels, TimeSeries>> timeSeriesByBucket = new HashMap<>();
     private static final SampleMerger MERGE_HELPER = new SampleMerger(SampleMerger.DeduplicatePolicy.ANY_WINS);
     private final Map<Long, List<TimeSeries>> processedTimeSeriesByBucket = new HashMap<>();
     private final long minTimestamp;
@@ -326,49 +326,20 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
             // as aggregator relies on accurate equality checks.
             assert labels instanceof ByteLabels : "labels must support correct equals() behavior";
 
-            // Use the Labels equals() method for consistent label comparison across different Labels implementations.
-            // The Labels class ensures that equals() returns consistent results regardless of the underlying implementation.
             boolean isNewBucket = !timeSeriesByBucket.containsKey(bucket);
-            List<TimeSeries> bucketSeries = timeSeriesByBucket.computeIfAbsent(bucket, k -> new ArrayList<>());
-
-            // Accumulate circuit breaker bytes for new bucket (if this is the first time series in this bucket)
+            Map<Labels, TimeSeries> bucketSeries = timeSeriesByBucket.computeIfAbsent(bucket, k -> new HashMap<>());
             if (isNewBucket) {
-                bytesForThisDoc += SampleList.ARRAYLIST_OVERHEAD + RamUsageEstimator.HASHTABLE_RAM_BYTES_PER_ENTRY;
+                bytesForThisDoc += SampleList.HASHMAP_OVERHEAD + RamUsageEstimator.HASHTABLE_RAM_BYTES_PER_ENTRY;
             }
-
-            // Find existing time series with same labels, or create new one
-            // TODO: Optimize label lookup for better performance
-            TimeSeries existingSeries = null;
-            int existingIndex = -1;
-            for (int i = 0; i < bucketSeries.size(); i++) {
-                TimeSeries series = bucketSeries.get(i);
-                // Compare labels directly using equals() method
-                if (labels.equals(series.getLabels())) {
-                    existingSeries = series;
-                    existingIndex = i;
-                    break;
-                }
-            }
-
+            TimeSeries existingSeries = bucketSeries.get(labels);
             if (existingSeries != null) {
-                // Merge samples from same time series using helper
-                // Assume data points within each chunk are sorted by timestamp
-                SampleList mergedSamples = MERGE_HELPER.merge(
-                    existingSeries.getSamples(),
-                    alignedSamplesBuilder.build(),
-                    true // assumeSorted - data points within each chunk are sorted
-                );
-
-                // Accumulate circuit breaker bytes for merged samples (new samples added)
+                SampleList mergedSamples = MERGE_HELPER.merge(existingSeries.getSamples(), alignedSamplesBuilder.build(), true);
                 int additionalSamples = mergedSamples.size() - existingSeries.getSamples().size();
                 if (additionalSamples > 0) {
                     bytesForThisDoc += additionalSamples * TimeSeries.ESTIMATED_SAMPLE_SIZE;
                 }
-
-                // Replace the existing series with updated one (reuse existing hash and labels)
-                // Use theoreticalMaxTimestamp (calculated from query params) instead of query maxTimestamp
-                bucketSeries.set(
-                    existingIndex,
+                bucketSeries.put(
+                    labels,
                     new TimeSeries(
                         mergedSamples,
                         existingSeries.getLabels(),
@@ -379,9 +350,6 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
                     )
                 );
             } else {
-                // Create new time series with aligned samples and labels
-                // No need to sort - samples within each chunk are already sorted by timestamp
-                // Use theoreticalMaxTimestamp (calculated from query params) instead of query maxTimestamp
                 TimeSeries newSeries = new TimeSeries(
                     alignedSamplesBuilder.build(),
                     labels,
@@ -390,12 +358,8 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
                     step,
                     null
                 );
-
-                // Accumulate circuit breaker bytes for new time series
                 bytesForThisDoc += TimeSeries.ESTIMATED_MEMORY_OVERHEAD + labels.ramBytesUsed();
-                // Note: alignedSamples bytes already accumulated above
-
-                bucketSeries.add(newSeries);
+                bucketSeries.put(labels, newSeries);
             }
 
             // Track circuit breaker bytes for this document
@@ -462,18 +426,16 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
             // Process each bucket's time series
             // Note: This only processes buckets that have collected data (timeSeriesByBucket entries)
             // Buckets with no data will be handled in buildAggregations()
-            for (Map.Entry<Long, List<TimeSeries>> entry : timeSeriesByBucket.entrySet()) {
+            for (Map.Entry<Long, Map<Labels, TimeSeries>> entry : timeSeriesByBucket.entrySet()) {
                 long bucketOrd = entry.getKey();
-
-                // Apply pipeline stages
-                List<TimeSeries> inputTimeSeries = entry.getValue();
+                List<TimeSeries> inputTimeSeries = new ArrayList<>(entry.getValue().values());
                 executionStats.inputSeriesCount += inputTimeSeries.size();
 
                 List<TimeSeries> processedTimeSeries = executeStages(inputTimeSeries);
 
                 // Track circuit breaker for processed time series storage
                 // Estimate the size of the processed time series list
-                long processedBytes = RamUsageEstimator.HASHTABLE_RAM_BYTES_PER_ENTRY + SampleList.ARRAYLIST_OVERHEAD;
+                long processedBytes = RamUsageEstimator.HASHTABLE_RAM_BYTES_PER_ENTRY + SampleList.HASHMAP_OVERHEAD;
                 for (TimeSeries ts : processedTimeSeries) {
                     processedBytes += TimeSeries.ESTIMATED_MEMORY_OVERHEAD + ts.getLabels().ramBytesUsed();
                     processedBytes += ts.getSamples().size() * TimeSeries.ESTIMATED_SAMPLE_SIZE;
@@ -893,4 +855,5 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
     long getCircuitBreakerBytesForTesting() {
         return circuitBreakerBytes;
     }
+
 }
