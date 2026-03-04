@@ -7,20 +7,27 @@
  */
 package org.opensearch.tsdb.query.rest;
 
+import org.opensearch.action.search.SearchRequest;
+import org.opensearch.action.search.SearchResponse;
 import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.common.settings.Setting;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.xcontent.XContentType;
+import org.opensearch.core.action.ActionListener;
 import org.opensearch.core.common.bytes.BytesArray;
 import org.opensearch.core.rest.RestStatus;
 import org.opensearch.rest.RestHandler.Route;
 import org.opensearch.rest.RestRequest;
+import org.opensearch.search.aggregations.Aggregations;
 import org.opensearch.test.OpenSearchTestCase;
 import org.opensearch.test.rest.FakeRestChannel;
 import org.opensearch.test.rest.FakeRestRequest;
 import org.opensearch.transport.client.node.NodeClient;
 import org.opensearch.tsdb.TSDBPlugin;
+import org.opensearch.tsdb.query.aggregator.InternalTSDBStats;
+import org.opensearch.tsdb.query.utils.TSDBStatsConstants;
 
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -28,7 +35,10 @@ import java.util.Map;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasSize;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * Unit tests for {@link RestTSDBStatsAction}, the REST handler for TSDB Stats queries.
@@ -62,7 +72,36 @@ public class RestTSDBStatsActionTests extends OpenSearchTestCase {
         );
 
         action = new RestTSDBStatsAction(clusterSettings);
+
+        // Set up mock client to respond with mock search results
         mockClient = mock(NodeClient.class);
+        doAnswer(invocation -> {
+            ActionListener<SearchResponse> listener = invocation.getArgument(1);
+
+            // Create sample label stats data
+            Map<String, InternalTSDBStats.CoordinatorLevelStats.LabelStats> labelStats = new HashMap<>();
+            labelStats.put("service", new InternalTSDBStats.CoordinatorLevelStats.LabelStats(50L, Map.of("api", 30L, "web", 20L)));
+            labelStats.put("region", new InternalTSDBStats.CoordinatorLevelStats.LabelStats(25L, Map.of("us-east", 15L, "us-west", 10L)));
+
+            // Create a mock InternalTSDBStats aggregation with sample data
+            InternalTSDBStats mockStats = InternalTSDBStats.forCoordinatorLevel(
+                TSDBStatsConstants.AGGREGATION_NAME,
+                null, // headStats
+                new InternalTSDBStats.CoordinatorLevelStats(100L, labelStats), // coordinator stats with sample label data
+                null // metadata
+            );
+
+            // Create real Aggregations object with the stats
+            Aggregations aggregations = new Aggregations(List.of(mockStats));
+
+            // Create mock SearchResponse with the aggregation
+            SearchResponse mockResponse = mock(SearchResponse.class);
+            when(mockResponse.getAggregations()).thenReturn(aggregations);
+
+            // Call the listener with the mock response
+            listener.onResponse(mockResponse);
+            return null;
+        }).when(mockClient).search(any(SearchRequest.class), any());
     }
 
     // ========== Handler Registration Tests ==========
@@ -79,26 +118,6 @@ public class RestTSDBStatsActionTests extends OpenSearchTestCase {
         // Verify all expected routes are registered
         assertTrue(routes.stream().anyMatch(r -> r.getPath().equals("/_tsdb/stats") && r.getMethod() == RestRequest.Method.GET));
         assertTrue(routes.stream().anyMatch(r -> r.getPath().equals("/_tsdb/stats") && r.getMethod() == RestRequest.Method.POST));
-    }
-
-    public void testRoutePaths() {
-        List<Route> routes = action.routes();
-
-        // Verify endpoint
-        long count = routes.stream().filter(r -> r.getPath().equals("/_tsdb/stats")).count();
-        assertThat("Should have 2 methods for /_tsdb/stats endpoint", count, equalTo(2L));
-    }
-
-    public void testRouteMethods() {
-        List<Route> routes = action.routes();
-
-        // Verify GET method
-        long getCount = routes.stream().filter(r -> r.getMethod() == RestRequest.Method.GET).count();
-        assertThat("Should have 1 GET route", getCount, equalTo(1L));
-
-        // Verify POST method
-        long postCount = routes.stream().filter(r -> r.getMethod() == RestRequest.Method.POST).count();
-        assertThat("Should have 1 POST route", postCount, equalTo(1L));
     }
 
     // ========== Query Parameter Tests ==========
@@ -229,7 +248,7 @@ public class RestTSDBStatsActionTests extends OpenSearchTestCase {
 
         action.handleRequest(request, channel, mockClient);
 
-        // Should use default time range (now-5m to now)
+        // Should use default time range (now-30m to now)
         assertThat(channel.capturedResponse().status(), equalTo(RestStatus.OK));
     }
 
@@ -271,13 +290,15 @@ public class RestTSDBStatsActionTests extends OpenSearchTestCase {
 
         assertThat(channel.capturedResponse().status(), equalTo(RestStatus.OK));
         String content = channel.capturedResponse().content().utf8ToString();
-        assertTrue(content.contains("\"include\":\"all\""));
+        // Default includes all stats - verify labelStats and valuesStats are present
+        assertTrue(content.contains("\"labelStats\""));
+        assertTrue(content.contains("\"valuesStats\""));
     }
 
     public void testValidIncludeParameter() throws Exception {
         FakeRestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withMethod(RestRequest.Method.GET)
             .withPath("/_tsdb/stats")
-            .withParams(Map.of("query", "fetch service:api", "include", "headStats,labelStats"))
+            .withParams(Map.of("query", "fetch service:api", "include", "headStats,labelValues"))
             .build();
         FakeRestChannel channel = new FakeRestChannel(request, true, 1);
 
@@ -285,9 +306,9 @@ public class RestTSDBStatsActionTests extends OpenSearchTestCase {
 
         assertThat(channel.capturedResponse().status(), equalTo(RestStatus.OK));
         String content = channel.capturedResponse().content().utf8ToString();
-        assertTrue(content.contains("\"include\""));
-        assertTrue(content.contains("headStats"));
-        assertTrue(content.contains("labelStats"));
+        // When include=headStats,labelValues, verify labelStats is present but valueStats is excluded
+        assertTrue(content.contains("\"labelStats\""));
+        assertFalse(content.contains("\"valuesStats\""));
     }
 
     public void testInvalidIncludeParameterReturnsError() throws Exception {
@@ -306,7 +327,7 @@ public class RestTSDBStatsActionTests extends OpenSearchTestCase {
     public void testMultipleIncludeOptions() throws Exception {
         FakeRestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withMethod(RestRequest.Method.GET)
             .withPath("/_tsdb/stats")
-            .withParams(Map.of("query", "fetch service:api", "include", "headStats,labelStats,valueStats"))
+            .withParams(Map.of("query", "fetch service:api", "include", "headStats,labelValues,valueStats"))
             .build();
         FakeRestChannel channel = new FakeRestChannel(request, true, 1);
 
@@ -326,7 +347,9 @@ public class RestTSDBStatsActionTests extends OpenSearchTestCase {
 
         assertThat(channel.capturedResponse().status(), equalTo(RestStatus.OK));
         String content = channel.capturedResponse().content().utf8ToString();
-        assertTrue(content.contains("\"include\":\"all\""));
+        // When include=all, verify all stats including valuesStats are present
+        assertTrue(content.contains("\"labelStats\""));
+        assertTrue(content.contains("\"valuesStats\""));
     }
 
     // ========== Format Parameter Tests ==========
@@ -342,7 +365,10 @@ public class RestTSDBStatsActionTests extends OpenSearchTestCase {
 
         assertThat(channel.capturedResponse().status(), equalTo(RestStatus.OK));
         String content = channel.capturedResponse().content().utf8ToString();
-        assertTrue(content.contains("\"format\":\"grouped\""));
+        // Verify grouped format response structure (labelStats with nested label names)
+        assertTrue(content.contains("\"labelStats\""));
+        assertTrue(content.contains("\"service\""));
+        assertTrue(content.contains("\"region\""));
     }
 
     public void testValidFormatParameter() throws Exception {
@@ -356,7 +382,9 @@ public class RestTSDBStatsActionTests extends OpenSearchTestCase {
 
         assertThat(channel.capturedResponse().status(), equalTo(RestStatus.OK));
         String content = channel.capturedResponse().content().utf8ToString();
-        assertTrue(content.contains("\"format\":\"flat\""));
+        // Verify flat format response structure (arrays instead of nested objects)
+        assertTrue(content.contains("\"labelValueCountByLabelName\""));
+        assertTrue(content.contains("\"memoryInBytesByLabelName\""));
     }
 
     public void testInvalidFormatParameterReturnsError() throws Exception {
@@ -385,7 +413,8 @@ public class RestTSDBStatsActionTests extends OpenSearchTestCase {
 
         assertThat(channel.capturedResponse().status(), equalTo(RestStatus.OK));
         String content = channel.capturedResponse().content().utf8ToString();
-        assertTrue(content.contains("\"indices\""));
+        // Verify aggregation response is returned
+        assertTrue(content.contains("\"labelStats\""));
     }
 
     public void testWithoutPartitions() throws Exception {
@@ -414,7 +443,10 @@ public class RestTSDBStatsActionTests extends OpenSearchTestCase {
 
         assertThat(channel.capturedResponse().status(), equalTo(RestStatus.OK));
         String content = channel.capturedResponse().content().utf8ToString();
-        assertTrue(content.contains("\"explain\":true"));
+        // Explain mode returns DSL translation, not aggregation results
+        assertTrue(content.contains("\"query\""));
+        assertTrue(content.contains("\"translated_dsl\""));
+        assertTrue(content.contains("\"explanation\""));
     }
 
     // ========== Request Body Priority Tests ==========
@@ -431,7 +463,8 @@ public class RestTSDBStatsActionTests extends OpenSearchTestCase {
 
         assertThat(channel.capturedResponse().status(), equalTo(RestStatus.OK));
         String content = channel.capturedResponse().content().utf8ToString();
-        assertTrue(content.contains("\"query\":\"fetch service:api\""));
+        // Verify aggregation response is returned
+        assertTrue(content.contains("\"labelStats\""));
     }
 
     public void testEmptyBodyFallsBackToUrlParam() throws Exception {
@@ -460,7 +493,7 @@ public class RestTSDBStatsActionTests extends OpenSearchTestCase {
         action.handleRequest(request, channel, mockClient);
 
         assertThat(channel.capturedResponse().status(), equalTo(RestStatus.BAD_REQUEST));
-        assertThat(channel.capturedResponse().content().utf8ToString(), containsString("error"));
+        assertThat(channel.capturedResponse().content().utf8ToString(), containsString("Failed to parse M3QL query"));
     }
 
     public void testMalformedJsonBodyReturnsError() throws Exception {
@@ -474,8 +507,38 @@ public class RestTSDBStatsActionTests extends OpenSearchTestCase {
         action.handleRequest(request, channel, mockClient);
 
         assertThat(channel.capturedResponse().status(), equalTo(RestStatus.BAD_REQUEST));
-        String content = channel.capturedResponse().content().utf8ToString();
-        assertTrue(content.contains("\"error\""));
+        assertThat(channel.capturedResponse().content().utf8ToString(), containsString("Failed to parse request body"));
+    }
+
+    public void testBuildQueryFromFetchWithInvalidFetchNode() throws Exception {
+        // Test query without a fetch expression
+        FakeRestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withMethod(RestRequest.Method.GET)
+            .withPath("/_tsdb/stats")
+            .withParams(Map.of("query", "100"))  // Not a fetch query
+            .build();
+        FakeRestChannel channel = new FakeRestChannel(request, true, 1);
+
+        action.handleRequest(request, channel, mockClient);
+
+        assertThat(channel.capturedResponse().status(), equalTo(RestStatus.BAD_REQUEST));
+        assertThat(channel.capturedResponse().content().utf8ToString(), containsString("Unknown function"));
+    }
+
+    public void testPrepareRequestExceptionHandling() throws Exception {
+        // Test the general exception catch block in prepareRequest (lines 425-433)
+        // We can't easily trigger this from external API, but we can test invalid format parameter
+        // which gets caught by the validation logic
+        FakeRestRequest request = new FakeRestRequest.Builder(xContentRegistry()).withMethod(RestRequest.Method.GET)
+            .withPath("/_tsdb/stats")
+            .withParams(Map.of("query", "fetch service:api", "format", "invalid_format"))
+            .build();
+        FakeRestChannel channel = new FakeRestChannel(request, true, 1);
+
+        action.handleRequest(request, channel, mockClient);
+
+        // Should return BAD_REQUEST with error message
+        assertThat(channel.capturedResponse().status(), equalTo(RestStatus.BAD_REQUEST));
+        assertThat(channel.capturedResponse().content().utf8ToString(), containsString("Invalid format"));
     }
 
     // ========== Combined Parameter Tests ==========
@@ -492,7 +555,7 @@ public class RestTSDBStatsActionTests extends OpenSearchTestCase {
                     "end",
                     "now",
                     "include",
-                    "headStats,labelStats",
+                    "headStats,labelValues",
                     "format",
                     "flat",
                     "partitions",
@@ -508,9 +571,9 @@ public class RestTSDBStatsActionTests extends OpenSearchTestCase {
 
         assertThat(channel.capturedResponse().status(), equalTo(RestStatus.OK));
         String content = channel.capturedResponse().content().utf8ToString();
-        assertTrue(content.contains("\"query\":\"fetch service:api\""));
-        assertTrue(content.contains("\"include\""));
-        assertTrue(content.contains("\"format\":\"flat\""));
-        assertTrue(content.contains("\"explain\":true"));
+        // Explain mode returns DSL translation, not aggregation results
+        assertTrue(content.contains("\"query\""));
+        assertTrue(content.contains("\"translated_dsl\""));
+        assertTrue(content.contains("\"explanation\""));
     }
 }

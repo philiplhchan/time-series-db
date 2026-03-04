@@ -7,13 +7,18 @@
  */
 package org.opensearch.tsdb.query.rest;
 
+import org.opensearch.action.search.SearchRequest;
 import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.core.common.Strings;
 import org.opensearch.core.rest.RestStatus;
 import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.core.xcontent.XContentParser;
+import org.opensearch.index.query.BoolQueryBuilder;
+import org.opensearch.index.query.QueryBuilder;
+import org.opensearch.index.query.QueryBuilders;
 import org.opensearch.rest.BytesRestResponse;
 import org.opensearch.rest.RestRequest;
+import org.opensearch.search.builder.SearchSourceBuilder;
 import org.opensearch.transport.client.node.NodeClient;
 import org.opensearch.tsdb.lang.m3.m3ql.parser.generated.M3QLParser;
 import org.opensearch.tsdb.lang.m3.m3ql.parser.generated.ParseException;
@@ -22,17 +27,26 @@ import org.opensearch.tsdb.lang.m3.m3ql.plan.M3ASTConverter;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.M3PlannerContext;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.FetchPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.M3PlanNode;
+import org.opensearch.tsdb.query.aggregator.TSDBStatsAggregationBuilder;
+import org.opensearch.tsdb.query.search.CachedWildcardQueryBuilder;
+import org.opensearch.tsdb.query.search.TimeRangePruningQueryBuilder;
+import org.opensearch.tsdb.query.utils.TSDBStatsConstants;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
 import java.util.Arrays;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 
+import static org.opensearch.tsdb.core.mapping.Constants.IndexSchema.LABELS;
 import static org.opensearch.rest.RestRequest.Method.GET;
 import static org.opensearch.rest.RestRequest.Method.POST;
+import static org.opensearch.tsdb.query.utils.TSDBStatsConstants.AGGREGATION_NAME;
 
 /**
  * REST handler for TSDB Stats queries.
@@ -47,7 +61,7 @@ import static org.opensearch.rest.RestRequest.Method.POST;
  *
  * <h2>POST Request Format:</h2>
  * <pre>{@code
- * POST /_tsdb/stats?start=now-1h&end=now&include=headStats,labelStats&format=grouped
+ * POST /_tsdb/stats?start=now-1h&end=now&include=headStats,labelValues&format=grouped
  * {
  *   "query": "fetch service:api"
  * }
@@ -63,10 +77,10 @@ import static org.opensearch.rest.RestRequest.Method.POST;
  * <ul>
  *   <li><b>query</b> (required for GET): M3QL fetch statement. Must include filters for 'service'
  *       and/or 'name' labels (backward compatibility)</li>
- *   <li><b>start</b> (optional): Start time (default: "now-5m")</li>
+ *   <li><b>start</b> (optional): Start time (default: "now-30m")</li>
  *   <li><b>end</b> (optional): End time (default: "now")</li>
  *   <li><b>include</b> (optional): Comma-separated list of stats to include.
- *       Valid values: headStats, labelStats, valueStats (default: all)</li>
+ *       Valid values: headStats, labelValues, valueStats (default: all)</li>
  *   <li><b>format</b> (optional): Response format. Valid values: grouped, flat (default: grouped)</li>
  *   <li><b>partitions</b> (optional): Comma-separated list of indices to query</li>
  *   <li><b>explain</b> (optional): Return translated DSL instead of executing (default: false)</li>
@@ -145,28 +159,29 @@ import static org.opensearch.rest.RestRequest.Method.POST;
  * <p>Note: The "seriesCountByLabelValuePair" array is only included if "valueStats" is in the include parameter.</p>
  */
 public class RestTSDBStatsAction extends BaseTSDBAction {
+    private static final Logger logger = LogManager.getLogger(RestTSDBStatsAction.class);
     public static final String NAME = "tsdb_stats_action";
 
     private static final String BASE_PATH = "/_tsdb/stats";
     private static final String INCLUDE_PARAM = "include";
-    private static final String INCLUDE_TYPE_HEAD_STATS = "headStats";
-    private static final String INCLUDE_TYPE_LABEL_STATS = "labelStats";
-    private static final String INCLUDE_TYPE_VALUE_STATS = "valueStats";
-    private static final String INCLUDE_TYPE_ALL = "all";
     private static final String FORMAT_PARAM = "format";
-    private static final String FORMAT_TYPE_GROUPED = "grouped";
-    // prometheus format
-    private static final String FORMAT_TYPE_FLAT = "flat";
-    private static final String DEFAULT_START_TIME = "now-5m";
+    private static final String DEFAULT_START_TIME = "now-30m";
     private static final String DEFAULT_END_TIME = "now";
 
-    // Valid include options
-    private static final Set<String> VALID_INCLUDE_OPTIONS = new HashSet<>(
-        Arrays.asList(INCLUDE_TYPE_HEAD_STATS, INCLUDE_TYPE_LABEL_STATS, INCLUDE_TYPE_VALUE_STATS, INCLUDE_TYPE_ALL)
+    // Valid include options (TreeSet for deterministic toString() order in error messages)
+    private static final Set<String> VALID_INCLUDE_OPTIONS = new TreeSet<>(
+        Arrays.asList(
+            TSDBStatsConstants.INCLUDE_HEAD_STATS,
+            TSDBStatsConstants.INCLUDE_LABEL_VALUES,
+            TSDBStatsConstants.INCLUDE_VALUE_STATS,
+            TSDBStatsConstants.INCLUDE_ALL
+        )
     );
 
-    // Valid format options
-    private static final Set<String> VALID_FORMAT_OPTIONS = new HashSet<>(Arrays.asList(FORMAT_TYPE_GROUPED, FORMAT_TYPE_FLAT));
+    // Valid format options (TreeSet for deterministic toString() order in error messages)
+    private static final Set<String> VALID_FORMAT_OPTIONS = new TreeSet<>(
+        Arrays.asList(TSDBStatsConstants.FORMAT_GROUPED, TSDBStatsConstants.FORMAT_FLAT)
+    );
 
     /**
      * Constructs a new {@code RestTSDBStatsAction} with the given cluster settings.
@@ -215,7 +230,7 @@ public class RestTSDBStatsAction extends BaseTSDBAction {
         String includeParam = request.param(INCLUDE_PARAM, "");
         if (includeParam.isEmpty()) {
             // Default: include all options
-            return List.of(INCLUDE_TYPE_ALL);
+            return List.of(TSDBStatsConstants.INCLUDE_ALL);
         }
 
         List<String> includeOptions = Arrays.stream(includeParam.split(","))
@@ -241,7 +256,7 @@ public class RestTSDBStatsAction extends BaseTSDBAction {
      * @throws IllegalArgumentException if invalid format is provided
      */
     private String parseFormatParam(RestRequest request) {
-        String format = request.param(FORMAT_PARAM, FORMAT_TYPE_GROUPED);
+        String format = request.param(FORMAT_PARAM, TSDBStatsConstants.FORMAT_GROUPED);
 
         if (!VALID_FORMAT_OPTIONS.contains(format)) {
             throw new IllegalArgumentException("Invalid format: " + format + ". Valid options: " + VALID_FORMAT_OPTIONS);
@@ -251,7 +266,8 @@ public class RestTSDBStatsAction extends BaseTSDBAction {
     }
 
     /**
-     * Validates that the M3QL query contains a fetch statement with required filters.
+     * Validates that the M3QL query contains a fetch statement with required filters,
+     * and returns the parsed FetchPlanNode for reuse.
      *
      * <p>The query must:
      * <ul>
@@ -260,9 +276,10 @@ public class RestTSDBStatsAction extends BaseTSDBAction {
      * </ul>
      *
      * @param query the M3QL query string
+     * @return the parsed FetchPlanNode for reuse in query building
      * @throws IllegalArgumentException if the query is invalid or doesn't contain required filters
      */
-    private void validateQuery(String query) {
+    private FetchPlanNode validateQuery(String query) {
         if (query == null || query.trim().isEmpty()) {
             throw new IllegalArgumentException("Query parameter is required");
         }
@@ -292,6 +309,8 @@ public class RestTSDBStatsAction extends BaseTSDBAction {
                     "Query must include filters for 'service' and/or 'name' labels. " + "Example: fetch service:api OR fetch name:http_*"
                 );
             }
+
+            return fetchPlan;
 
         } catch (ParseException e) {
             throw new IllegalArgumentException("Failed to parse M3QL query: " + e.getMessage(), e);
@@ -352,26 +371,13 @@ public class RestTSDBStatsAction extends BaseTSDBAction {
         try {
             requestBody = parseRequestBody(request);
         } catch (Exception e) {
-            final String message = "Failed to parse request body: " + e.getMessage();
-            return channel -> {
-                XContentBuilder response = channel.newErrorBuilder();
-                response.startObject();
-                response.field(ERROR_FIELD, message);
-                response.endObject();
-                channel.sendResponse(new BytesRestResponse(RestStatus.BAD_REQUEST, response));
-            };
+            return errorResponse("Failed to parse request body: " + e.getMessage(), RestStatus.BAD_REQUEST);
         }
         String query = (requestBody != null && requestBody.query() != null) ? requestBody.query() : request.param(QUERY_PARAM);
 
         // Validate time range first (fail fast)
         if (startMs >= endMs) {
-            return channel -> {
-                XContentBuilder response = channel.newErrorBuilder();
-                response.startObject();
-                response.field(ERROR_FIELD, "Start time must be before end time");
-                response.endObject();
-                channel.sendResponse(new BytesRestResponse(RestStatus.BAD_REQUEST, response));
-            };
+            return errorResponse("Start time must be before end time", RestStatus.BAD_REQUEST);
         }
 
         // Parse include and format parameters with validation
@@ -381,114 +387,112 @@ public class RestTSDBStatsAction extends BaseTSDBAction {
             includeOptions = parseIncludeParam(request);
             format = parseFormatParam(request);
         } catch (IllegalArgumentException e) {
-            return channel -> {
-                XContentBuilder response = channel.newErrorBuilder();
-                response.startObject();
-                response.field(ERROR_FIELD, e.getMessage());
-                response.endObject();
-                channel.sendResponse(new BytesRestResponse(RestStatus.BAD_REQUEST, response));
-            };
+            return errorResponse(e.getMessage(), RestStatus.BAD_REQUEST);
         }
 
-        // Validate query - must be a fetch statement with service and/or name filters
+        // Validate query and parse FetchPlanNode (reused below to avoid duplicate parsing)
+        FetchPlanNode fetchPlan;
         try {
-            validateQuery(query);
+            fetchPlan = validateQuery(query);
         } catch (IllegalArgumentException e) {
-            return channel -> {
-                XContentBuilder response = channel.newErrorBuilder();
-                response.startObject();
-                response.field(ERROR_FIELD, e.getMessage());
-                response.endObject();
-                channel.sendResponse(new BytesRestResponse(RestStatus.BAD_REQUEST, response));
-            };
+            return errorResponse(e.getMessage(), RestStatus.BAD_REQUEST);
         }
 
-        // TODO: Implement aggregator in next PR (PR #2)
-        // For now, return a placeholder response showing the parsed parameters
-        return channel -> {
-            XContentBuilder response = channel.newBuilder();
-            response.startObject();
-            response.field("message", "TSDB Stats endpoint - aggregator implementation pending");
-            response.field("query", query);
-            response.field("start", startMs);
-            response.field("end", endMs);
-            if (includeOptions.size() == 1 && includeOptions.get(0).equals(INCLUDE_TYPE_ALL)) {
-                response.field("include", "all");
-            } else {
-                response.field("include", includeOptions);
-            }
-            response.field("format", format);
-            if (indices.length > 0) {
-                response.field("indices", indices);
-            }
-            response.field("explain", explain);
-            response.endObject();
-            channel.sendResponse(new BytesRestResponse(RestStatus.OK, response));
-        };
+        // Determine what statistics to include
+        boolean includeValueStats = includeOptions.contains(TSDBStatsConstants.INCLUDE_ALL)
+            || includeOptions.contains(TSDBStatsConstants.INCLUDE_VALUE_STATS);
 
-        /*
-         * TODO: Uncomment this section in PR #2 when TSDBStatsAggregator is implemented:
-         *
-         * try {
-         *     // Translate M3QL fetch to QueryBuilder
-         *     QueryBuilder filter = FetchQueryBuilder.buildQuery(query, startMs, endMs);
-         *
-         *     // Build aggregation
-         *     TSDBStatsAggregationBuilder aggBuilder = new TSDBStatsAggregationBuilder(
-         *         "tsdb_stats",
-         *         startMs,
-         *         endMs,
-         *         includeOptions,
-         *         format
-         *     );
-         *
-         *     // Build search request
-         *     SearchSourceBuilder searchSourceBuilder = new SearchSourceBuilder()
-         *         .query(filter)
-         *         .aggregation(aggBuilder)
-         *         .size(0);
-         *
-         *     // Handle explain mode
-         *     if (explain) {
-         *         return buildExplainResponse(query, searchSourceBuilder);
-         *     }
-         *
-         *     SearchRequest searchRequest = new SearchRequest();
-         *     searchRequest.source(searchSourceBuilder);
-         *     searchRequest.requestCache(false);
-         *
-         *     if (indices.length > 0) {
-         *         searchRequest.indices(indices);
-         *     }
-         *
-         *     // Execute search
-         *     return channel -> client.search(
-         *         searchRequest,
-         *         new TSDBStatsResponseListener(channel, includeOptions, format)
-         *     );
-         *
-         * } catch (Exception e) {
-         *     return channel -> {
-         *         XContentBuilder response = channel.newErrorBuilder();
-         *         response.startObject();
-         *         response.field(ERROR_FIELD, e.getMessage());
-         *         response.endObject();
-         *         channel.sendResponse(new BytesRestResponse(RestStatus.BAD_REQUEST, response));
-         *     };
-         * }
-         */
+        try {
+            // Build QueryBuilder from the already-parsed FetchPlanNode
+            QueryBuilder filter = buildQueryFromFetch(fetchPlan, startMs, endMs);
+
+            // Build aggregation
+            TSDBStatsAggregationBuilder aggBuilder = new TSDBStatsAggregationBuilder(AGGREGATION_NAME, startMs, endMs, includeValueStats);
+
+            // Build search request
+            SearchSourceBuilder searchSourceBuilder = new SearchSourceBuilder().query(filter).aggregation(aggBuilder).size(0);
+
+            // Handle explain mode
+            if (explain) {
+                return buildExplainResponse(query, searchSourceBuilder);
+            }
+
+            SearchRequest searchRequest = new SearchRequest();
+            searchRequest.source(searchSourceBuilder);
+            searchRequest.requestCache(false);
+
+            if (indices.length > 0) {
+                searchRequest.indices(indices);
+            }
+
+            // Execute search
+            return channel -> client.search(searchRequest, new TSDBStatsResponseListener(channel, includeOptions, format));
+
+        } catch (IllegalArgumentException e) {
+            return errorResponse(e.getMessage(), RestStatus.BAD_REQUEST);
+        } catch (Exception e) {
+            logger.error("Internal error building TSDB stats request", e);
+            return errorResponse("Internal error: " + e.getMessage(), RestStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    /**
+     * Returns a RestChannelConsumer that sends an error response with the given message and status.
+     */
+    private static RestChannelConsumer errorResponse(String message, RestStatus status) {
+        return channel -> {
+            XContentBuilder response = channel.newErrorBuilder();
+            response.startObject();
+            response.field(ERROR_FIELD, message);
+            response.endObject();
+            channel.sendResponse(new BytesRestResponse(status, response));
+        };
+    }
+
+    /**
+     * Builds a QueryBuilder from an already-parsed FetchPlanNode.
+     *
+     * @param fetchPlan the parsed FetchPlanNode from validateQuery
+     * @param startMs the start timestamp in milliseconds
+     * @param endMs the end timestamp in milliseconds
+     * @return a QueryBuilder matching the fetch filters and time range
+     */
+    private QueryBuilder buildQueryFromFetch(FetchPlanNode fetchPlan, long startMs, long endMs) {
+        // Build a simple match query from the filters
+        Map<String, List<String>> matchFilters = fetchPlan.getMatchFilters();
+        BoolQueryBuilder boolQuery = QueryBuilders.boolQuery();
+
+        // Add label filters
+        for (Map.Entry<String, List<String>> entry : matchFilters.entrySet()) {
+            String labelKey = entry.getKey();
+            List<String> values = entry.getValue();
+
+            // For each value, create a term or wildcard query (OR semantics: at least one must match)
+            BoolQueryBuilder labelQuery = QueryBuilders.boolQuery().minimumShouldMatch(1);
+            for (String value : values) {
+                String labelFilter = labelKey + ":" + value;  // Format: "service:api"
+                if (value.contains("*") || value.contains("?")) {
+                    // Wildcard query on labels field
+                    labelQuery.should(new CachedWildcardQueryBuilder(LABELS, labelFilter));
+                } else {
+                    // Exact term query on labels field
+                    labelQuery.should(QueryBuilders.termQuery(LABELS, labelFilter));
+                }
+            }
+            boolQuery.filter(labelQuery);
+        }
+
+        // Wrap with time range pruning query
+        return new TimeRangePruningQueryBuilder(boolQuery, startMs, endMs);
     }
 
     /**
      * Builds a response for explain mode that returns the translated DSL.
      *
-     * TODO: Implement in PR #2
-     *
      * @param query the original M3QL fetch query
      * @param searchSourceBuilder the translated DSL
      * @return a RestChannelConsumer that sends the explain response
      */
-    /*
     private RestChannelConsumer buildExplainResponse(String query, SearchSourceBuilder searchSourceBuilder) {
         return channel -> {
             XContentBuilder response = channel.newBuilder();
@@ -500,5 +504,4 @@ public class RestTSDBStatsAction extends BaseTSDBAction {
             channel.sendResponse(new BytesRestResponse(RestStatus.OK, response));
         };
     }
-    */
 }

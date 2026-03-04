@@ -8,11 +8,12 @@
 package org.opensearch.tsdb.query.rest;
 
 import org.opensearch.action.search.SearchResponse;
-import org.opensearch.core.action.ActionListener;
 import org.opensearch.core.rest.RestStatus;
 import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.rest.BytesRestResponse;
 import org.opensearch.rest.RestChannel;
+import org.opensearch.rest.RestResponse;
+import org.opensearch.rest.action.RestToXContentListener;
 import org.opensearch.search.aggregations.Aggregation;
 import org.opensearch.tsdb.query.aggregator.InternalTSDBStats;
 
@@ -22,15 +23,44 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
+import static org.opensearch.tsdb.query.utils.TSDBStatsConstants.AGGREGATION_NAME;
+import static org.opensearch.tsdb.query.utils.TSDBStatsConstants.FORMAT_FLAT;
+import static org.opensearch.tsdb.query.utils.TSDBStatsConstants.INCLUDE_ALL;
+import static org.opensearch.tsdb.query.utils.TSDBStatsConstants.INCLUDE_HEAD_STATS;
+import static org.opensearch.tsdb.query.utils.TSDBStatsConstants.INCLUDE_LABEL_VALUES;
+import static org.opensearch.tsdb.query.utils.TSDBStatsConstants.INCLUDE_VALUE_STATS;
+
 /**
  * Response listener for TSDB stats queries.
  *
  * <p>This listener handles formatting the response in either 'grouped' or 'flat' format
  * based on the request parameters.</p>
  */
-public class TSDBStatsResponseListener implements ActionListener<SearchResponse> {
+public class TSDBStatsResponseListener extends RestToXContentListener<SearchResponse> {
 
-    private final RestChannel channel;
+    // Response field names
+    private static final String FIELD_ERROR = "error";
+    private static final String FIELD_HEAD_STATS = "headStats";
+    private static final String FIELD_NUM_SERIES = "numSeries";
+    private static final String FIELD_CHUNK_COUNT = "chunkCount";
+    private static final String FIELD_MIN_TIME = "minTime";
+    private static final String FIELD_MAX_TIME = "maxTime";
+    private static final String FIELD_LABEL_STATS = "labelStats";
+    private static final String FIELD_VALUES = "values";
+    private static final String FIELD_VALUES_STATS = "valuesStats";
+    private static final String FIELD_NAME = "name";
+    private static final String FIELD_VALUE = "value";
+    private static final String FIELD_SERIES_COUNT_BY_METRIC_NAME = "seriesCountByMetricName";
+    private static final String FIELD_LABEL_VALUE_COUNT_BY_LABEL_NAME = "labelValueCountByLabelName";
+    private static final String FIELD_MEMORY_IN_BYTES_BY_LABEL_NAME = "memoryInBytesByLabelName";
+    private static final String FIELD_SERIES_COUNT_BY_LABEL_VALUE_PAIR = "seriesCountByLabelValuePair";
+
+    // Label name for metric name
+    private static final String LABEL_NAME = "name";
+
+    // String header overhead in Java: ~24 bytes (object header + hashcode + length)
+    private static final long STRING_HEADER_BYTES = 24;
+
     private final List<String> includeOptions;
     private final String format;
 
@@ -38,111 +68,112 @@ public class TSDBStatsResponseListener implements ActionListener<SearchResponse>
      * Creates a new TSDBStatsResponseListener.
      *
      * @param channel the REST channel to send the response to
-     * @param includeOptions list of stats to include (headStats, labelStats, valueStats)
+     * @param includeOptions list of stats to include (headStats, labelValues, valueStats)
      * @param format the response format (grouped or flat)
      */
     public TSDBStatsResponseListener(RestChannel channel, List<String> includeOptions, String format) {
-        this.channel = channel;
+        super(channel);
         this.includeOptions = includeOptions;
         this.format = format;
     }
 
+    /**
+     * Builds the REST response from a search response by transforming it into the requested format.
+     *
+     * @param searchResponse the search response to transform
+     * @param builder the XContent builder to use for constructing the response
+     * @return a REST response with the transformed data
+     * @throws Exception if an error occurs during transformation
+     */
     @Override
-    public void onResponse(SearchResponse searchResponse) {
+    public RestResponse buildResponse(SearchResponse searchResponse, XContentBuilder builder) throws Exception {
         try {
-            XContentBuilder builder = channel.newBuilder();
-            builder.startObject();
-
-            // Check if aggregations are null
-            if (searchResponse.getAggregations() == null) {
-                builder.field("error", "No aggregations in response");
-                builder.endObject();
-                channel.sendResponse(new BytesRestResponse(RestStatus.INTERNAL_SERVER_ERROR, builder));
-                return;
-            }
-
-            // Extract the tsdb_stats aggregation
-            Aggregation agg = searchResponse.getAggregations().get("tsdb_stats");
-            if (agg instanceof InternalTSDBStats) {
-                InternalTSDBStats tsdbStats = (InternalTSDBStats) agg;
-
-                // Format response based on format parameter
-                if ("flat".equals(format)) {
-                    formatFlatResponse(tsdbStats, builder);
-                } else {
-                    // Default to grouped
-                    formatGroupedResponse(tsdbStats, builder);
-                }
-            } else {
-                builder.field("error", "Unexpected aggregation type");
-                builder.endObject();
-                channel.sendResponse(new BytesRestResponse(RestStatus.INTERNAL_SERVER_ERROR, builder));
-                return;
-            }
-
-            builder.endObject();
-            channel.sendResponse(new BytesRestResponse(RestStatus.OK, builder));
+            return buildStatsResponse(searchResponse, builder);
         } catch (Exception e) {
-            onFailure(e);
+            // Discard the partially-written builder and create a fresh one for the error response
+            XContentBuilder errorBuilder = channel.newErrorBuilder();
+            return buildErrorResponse(errorBuilder, e);
         }
     }
 
     /**
-     * Formats the response in 'grouped' format.
+     * Builds the stats response from a search response.
+     */
+    private RestResponse buildStatsResponse(SearchResponse searchResponse, XContentBuilder builder) throws IOException {
+        builder.startObject();
+
+        if (searchResponse.getAggregations() == null) {
+            builder.field(FIELD_ERROR, "No aggregations in response");
+            builder.endObject();
+            return new BytesRestResponse(RestStatus.INTERNAL_SERVER_ERROR, builder);
+        }
+
+        Aggregation agg = searchResponse.getAggregations().get(AGGREGATION_NAME);
+        if (!(agg instanceof InternalTSDBStats)) {
+            builder.field(FIELD_ERROR, "Unexpected aggregation type");
+            builder.endObject();
+            return new BytesRestResponse(RestStatus.INTERNAL_SERVER_ERROR, builder);
+        }
+
+        InternalTSDBStats tsdbStats = (InternalTSDBStats) agg;
+
+        if (FORMAT_FLAT.equals(format)) {
+            formatFlatResponse(tsdbStats, builder);
+        } else {
+            formatGroupedResponse(tsdbStats, builder);
+        }
+
+        builder.endObject();
+        return new BytesRestResponse(RestStatus.OK, builder);
+    }
+
+    /**
+     * Builds an error response when processing fails.
      *
-     * Grouped format organizes statistics by label name with nested values and stats.
-     * Example:
-     * {
-     *   "headStats": { "numSeries": 100, ... },
-     *   "totalTimeSeries": 1000,
-     *   "labelStats": {
-     *     "cluster": {
-     *       "totalTimeSeries": 100,
-     *       "values": ["prod", "staging"],
-     *       "valuesStats": { "prod": 80, "staging": 20 }
-     *     }
-     *   }
-     * }
+     * @param builder the XContent builder to use for the error response
+     * @param error the exception that caused the error
+     * @return a REST response with error details
+     * @throws IOException if an I/O error occurs during writing
+     */
+    private RestResponse buildErrorResponse(XContentBuilder builder, Exception error) throws IOException {
+        builder.startObject();
+        builder.field(FIELD_ERROR, error.getMessage());
+        builder.endObject();
+        return new BytesRestResponse(RestStatus.INTERNAL_SERVER_ERROR, builder);
+    }
+
+    /**
+     * Formats the response in 'grouped' format.
      *
      * @param stats the TSDB stats aggregation result
      * @param builder the XContent builder
      * @throws IOException if an I/O error occurs
      */
     private void formatGroupedResponse(InternalTSDBStats stats, XContentBuilder builder) throws IOException {
-        boolean includeValueStats = includeOptions.isEmpty() || includeOptions.contains("valueStats");
-        boolean includeHeadStats = includeOptions.isEmpty() || includeOptions.contains("headStats");
-        boolean includeLabelStats = includeOptions.isEmpty() || includeOptions.contains("labelStats");
+        boolean includeValueStats = includeOptions.contains(INCLUDE_ALL) || includeOptions.contains(INCLUDE_VALUE_STATS);
+        boolean includeHeadStats = includeOptions.contains(INCLUDE_ALL) || includeOptions.contains(INCLUDE_HEAD_STATS);
+        boolean includeLabelStats = includeOptions.contains(INCLUDE_ALL) || includeOptions.contains(INCLUDE_LABEL_VALUES);
 
-        // Write headStats if included
         if (includeHeadStats && stats.getHeadStats() != null) {
-            InternalTSDBStats.HeadStats headStats = stats.getHeadStats();
-            builder.startObject("headStats");
-            builder.field("numSeries", headStats.numSeries());
-            builder.field("chunkCount", headStats.chunkCount());
-            builder.field("minTime", headStats.minTime());
-            builder.field("maxTime", headStats.maxTime());
-            builder.endObject();
+            writeHeadStats(stats.getHeadStats(), builder);
         }
 
-        // Write labelStats if included
         if (includeLabelStats) {
-            builder.startObject("labelStats");
+            builder.startObject(FIELD_LABEL_STATS);
 
-            // Write numSeries at the start of labelStats
             if (stats.getNumSeries() != null) {
-                builder.field("numSeries", stats.getNumSeries());
+                builder.field(FIELD_NUM_SERIES, stats.getNumSeries());
             }
 
-            for (Map.Entry<String, InternalTSDBStats.LabelStats> entry : stats.getLabelStats().entrySet()) {
+            for (Map.Entry<String, InternalTSDBStats.CoordinatorLevelStats.LabelStats> entry : stats.getLabelStats().entrySet()) {
                 builder.startObject(entry.getKey());
-                InternalTSDBStats.LabelStats labelStats = entry.getValue();
-                if (labelStats.getNumSeries() != null) {
-                    builder.field("numSeries", labelStats.getNumSeries());
+                InternalTSDBStats.CoordinatorLevelStats.LabelStats labelStats = entry.getValue();
+                if (labelStats.numSeries() != null) {
+                    builder.field(FIELD_NUM_SERIES, labelStats.numSeries());
                 }
-                builder.field("values", labelStats.getValues());
-                // Only include valuesStats if valueStats is in includeOptions
-                if (includeValueStats && labelStats.getValuesStats() != null) {
-                    builder.field("valuesStats", labelStats.getValuesStats());
+                builder.field(FIELD_VALUES, labelStats.valuesStats().keySet());
+                if (includeValueStats) {
+                    builder.field(FIELD_VALUES_STATS, labelStats.valuesStats());
                 }
                 builder.endObject();
             }
@@ -153,146 +184,103 @@ public class TSDBStatsResponseListener implements ActionListener<SearchResponse>
     /**
      * Formats the response in 'flat' format.
      *
-     * Flat format converts grouped data into flat arrays for easier consumption.
-     * Example:
-     * {
-     *   "headStats": { "numSeries": 100, ... },
-     *   "seriesCountByMetricName": [
-     *     { "name": "http_requests_total", "value": 50 }
-     *   ],
-     *   "labelValueCountByLabelName": [
-     *     { "name": "__name__", "value": 10 }
-     *   ],
-     *   "memoryInBytesByLabelName": [
-     *     { "name": "__name__", "value": 1024 }
-     *   ],
-     *   "seriesCountByLabelValuePair": [
-     *     { "name": "cluster=prod", "value": 80 }
-     *   ]
-     * }
-     *
      * @param stats the TSDB stats aggregation result
      * @param builder the XContent builder
      * @throws IOException if an I/O error occurs
      */
     private void formatFlatResponse(InternalTSDBStats stats, XContentBuilder builder) throws IOException {
-        boolean includeValueStats = includeOptions.isEmpty() || includeOptions.contains("valueStats");
-        boolean includeHeadStats = includeOptions.isEmpty() || includeOptions.contains("headStats");
-        boolean includeLabelStats = includeOptions.isEmpty() || includeOptions.contains("labelStats");
+        boolean includeValueStats = includeOptions.contains(INCLUDE_ALL) || includeOptions.contains(INCLUDE_VALUE_STATS);
+        boolean includeHeadStats = includeOptions.contains(INCLUDE_ALL) || includeOptions.contains(INCLUDE_HEAD_STATS);
+        boolean includeLabelValues = includeOptions.contains(INCLUDE_ALL) || includeOptions.contains(INCLUDE_LABEL_VALUES);
 
-        // Write headStats if included
         if (includeHeadStats && stats.getHeadStats() != null) {
-            InternalTSDBStats.HeadStats headStats = stats.getHeadStats();
-            builder.startObject("headStats");
-            builder.field("numSeries", headStats.numSeries());
-            builder.field("chunkCount", headStats.chunkCount());
-            builder.field("minTime", headStats.minTime());
-            builder.field("maxTime", headStats.maxTime());
-            builder.endObject();
+            writeHeadStats(stats.getHeadStats(), builder);
         }
 
-        // Only process labelStats if included
-        if (includeLabelStats) {
-            Map<String, InternalTSDBStats.LabelStats> labelStatsMap = stats.getLabelStats();
+        if (!includeLabelValues) {
+            return;
+        }
 
-            // seriesCountByMetricName - series count for each name value
-            List<NameValuePair> seriesCountByMetricName = new ArrayList<>();
-            InternalTSDBStats.LabelStats nameLabelStats = labelStatsMap.get("name");
-            if (nameLabelStats != null && nameLabelStats.getValuesStats() != null) {
-                for (Map.Entry<String, Long> entry : nameLabelStats.getValuesStats().entrySet()) {
-                    seriesCountByMetricName.add(new NameValuePair(entry.getKey(), entry.getValue()));
-                }
-                // Sort by count descending
-                seriesCountByMetricName.sort(Comparator.comparingLong(NameValuePair::value).reversed());
+        Map<String, InternalTSDBStats.CoordinatorLevelStats.LabelStats> labelStatsMap = stats.getLabelStats();
+
+        // seriesCountByMetricName - series count for each name value
+        List<NameValuePair> seriesCountByMetricName = new ArrayList<>();
+        InternalTSDBStats.CoordinatorLevelStats.LabelStats nameLabelStats = labelStatsMap.get(LABEL_NAME);
+        if (nameLabelStats != null) {
+            for (Map.Entry<String, Long> entry : nameLabelStats.valuesStats().entrySet()) {
+                seriesCountByMetricName.add(new NameValuePair(entry.getKey(), entry.getValue()));
             }
-            writeNameValueArray(builder, "seriesCountByMetricName", seriesCountByMetricName);
+            seriesCountByMetricName.sort(Comparator.comparingLong(NameValuePair::value).reversed());
+        }
+        writeNameValueArray(builder, FIELD_SERIES_COUNT_BY_METRIC_NAME, seriesCountByMetricName);
 
-            // labelValueCountByLabelName - count of distinct values for each label
-            List<NameValuePair> labelValueCounts = new ArrayList<>();
-            for (Map.Entry<String, InternalTSDBStats.LabelStats> entry : labelStatsMap.entrySet()) {
+        // labelValueCountByLabelName - count of distinct values for each label
+        List<NameValuePair> labelValueCounts = new ArrayList<>();
+        for (Map.Entry<String, InternalTSDBStats.CoordinatorLevelStats.LabelStats> entry : labelStatsMap.entrySet()) {
+            long valueCount = entry.getValue().valuesStats().size();
+            labelValueCounts.add(new NameValuePair(entry.getKey(), valueCount));
+        }
+        labelValueCounts.sort(Comparator.comparingLong(NameValuePair::value).reversed());
+        writeNameValueArray(builder, FIELD_LABEL_VALUE_COUNT_BY_LABEL_NAME, labelValueCounts);
+
+        // memoryInBytesByLabelName - estimated memory usage by label name
+        // Follows Prometheus approach: (len(name) + header + len(value) + header) * numSeries
+        List<NameValuePair> memoryByLabel = new ArrayList<>();
+        for (Map.Entry<String, InternalTSDBStats.CoordinatorLevelStats.LabelStats> entry : labelStatsMap.entrySet()) {
+            String labelName = entry.getKey();
+            InternalTSDBStats.CoordinatorLevelStats.LabelStats labelStat = entry.getValue();
+            long memoryBytes = 0;
+
+            for (Map.Entry<String, Long> valueEntry : labelStat.valuesStats().entrySet()) {
+                String value = valueEntry.getKey();
+                long numSeries = valueEntry.getValue();
+
+                long nameBytes = (labelName.length() * 2L) + STRING_HEADER_BYTES;
+                long valueBytes = (value.length() * 2L) + STRING_HEADER_BYTES;
+                // When numSeries is 0 (includeValueStats=false), assume 1 series per value for estimation
+                memoryBytes += (nameBytes + valueBytes) * Math.max(numSeries, 1);
+            }
+            memoryByLabel.add(new NameValuePair(labelName, memoryBytes));
+        }
+        memoryByLabel.sort(Comparator.comparingLong(NameValuePair::value).reversed());
+        writeNameValueArray(builder, FIELD_MEMORY_IN_BYTES_BY_LABEL_NAME, memoryByLabel);
+
+        // seriesCountByLabelValuePair - only include if valueStats is in includeOptions
+        if (includeValueStats) {
+            List<NameValuePair> seriesCountByPair = new ArrayList<>();
+            for (Map.Entry<String, InternalTSDBStats.CoordinatorLevelStats.LabelStats> entry : labelStatsMap.entrySet()) {
                 String labelName = entry.getKey();
-                InternalTSDBStats.LabelStats labelStat = entry.getValue();
-                long valueCount = labelStat.getValues() != null ? labelStat.getValues().size() : 0;
-                labelValueCounts.add(new NameValuePair(labelName, valueCount));
-            }
-            // Sort by count descending
-            labelValueCounts.sort(Comparator.comparingLong(NameValuePair::value).reversed());
-            writeNameValueArray(builder, "labelValueCountByLabelName", labelValueCounts);
-
-            // memoryInBytesByLabelName - estimated memory usage by label name
-            // Follows Prometheus approach: (len(name) + header + len(value) + header) * numSeries
-            // See: https://github.com/prometheus/prometheus/blob/main/model/labels/labels_slicelabels.go#L520
-            List<NameValuePair> memoryByLabel = new ArrayList<>();
-            for (Map.Entry<String, InternalTSDBStats.LabelStats> entry : labelStatsMap.entrySet()) {
-                String labelName = entry.getKey();
-                InternalTSDBStats.LabelStats labelStat = entry.getValue();
-                long memoryBytes = 0;
-
-                // String header overhead in Java: ~24 bytes (object header + hashcode + length)
-                final long STRING_HEADER_BYTES = 24;
-
-                if (labelStat.getValuesStats() != null) {
-                    // Calculate memory for each label name/value pair weighted by series count
-                    for (Map.Entry<String, Long> valueEntry : labelStat.getValuesStats().entrySet()) {
-                        String value = valueEntry.getKey();
-                        long numSeries = valueEntry.getValue();
-
-                        // Memory for label name: UTF-16 chars (2 bytes each) + header
-                        long nameBytes = (labelName.length() * 2L) + STRING_HEADER_BYTES;
-                        // Memory for label value: UTF-16 chars (2 bytes each) + header
-                        long valueBytes = (value.length() * 2L) + STRING_HEADER_BYTES;
-                        // Total memory = (name + value) * number of series with this label value
-                        memoryBytes += (nameBytes + valueBytes) * numSeries;
-                    }
-                } else if (labelStat.getValues() != null) {
-                    // Fallback when valuesStats is null but values list exists
-                    // Assume 1 series per value for estimation
-                    for (String value : labelStat.getValues()) {
-                        long nameBytes = (labelName.length() * 2L) + STRING_HEADER_BYTES;
-                        long valueBytes = (value.length() * 2L) + STRING_HEADER_BYTES;
-                        memoryBytes += nameBytes + valueBytes;
-                    }
+                for (Map.Entry<String, Long> valueEntry : entry.getValue().valuesStats().entrySet()) {
+                    String pairName = labelName + "=" + valueEntry.getKey();
+                    seriesCountByPair.add(new NameValuePair(pairName, valueEntry.getValue()));
                 }
-                memoryByLabel.add(new NameValuePair(labelName, memoryBytes));
             }
-            // Sort by memory descending
-            memoryByLabel.sort(Comparator.comparingLong(NameValuePair::value).reversed());
-            writeNameValueArray(builder, "memoryInBytesByLabelName", memoryByLabel);
-
-            // seriesCountByLabelValuePair - only include if valueStats is in includeOptions
-            if (includeValueStats) {
-                List<NameValuePair> seriesCountByPair = new ArrayList<>();
-                for (Map.Entry<String, InternalTSDBStats.LabelStats> entry : labelStatsMap.entrySet()) {
-                    String labelName = entry.getKey();
-                    InternalTSDBStats.LabelStats labelStat = entry.getValue();
-                    if (labelStat.getValuesStats() != null) {
-                        for (Map.Entry<String, Long> valueEntry : labelStat.getValuesStats().entrySet()) {
-                            String pairName = labelName + "=" + valueEntry.getKey();
-                            seriesCountByPair.add(new NameValuePair(pairName, valueEntry.getValue()));
-                        }
-                    }
-                }
-                // Sort by count descending
-                seriesCountByPair.sort(Comparator.comparingLong(NameValuePair::value).reversed());
-                writeNameValueArray(builder, "seriesCountByLabelValuePair", seriesCountByPair);
-            }
+            seriesCountByPair.sort(Comparator.comparingLong(NameValuePair::value).reversed());
+            writeNameValueArray(builder, FIELD_SERIES_COUNT_BY_LABEL_VALUE_PAIR, seriesCountByPair);
         }
     }
 
     /**
+     * Writes headStats to the XContent builder.
+     */
+    private void writeHeadStats(InternalTSDBStats.HeadStats headStats, XContentBuilder builder) throws IOException {
+        builder.startObject(FIELD_HEAD_STATS);
+        builder.field(FIELD_NUM_SERIES, headStats.numSeries());
+        builder.field(FIELD_CHUNK_COUNT, headStats.chunkCount());
+        builder.field(FIELD_MIN_TIME, headStats.minTime());
+        builder.field(FIELD_MAX_TIME, headStats.maxTime());
+        builder.endObject();
+    }
+
+    /**
      * Writes an array of name-value pairs to the XContent builder.
-     *
-     * @param builder the XContent builder
-     * @param fieldName the field name for the array
-     * @param pairs the list of name-value pairs
-     * @throws IOException if an I/O error occurs
      */
     private void writeNameValueArray(XContentBuilder builder, String fieldName, List<NameValuePair> pairs) throws IOException {
         builder.startArray(fieldName);
         for (NameValuePair pair : pairs) {
             builder.startObject();
-            builder.field("name", pair.name());
-            builder.field("value", pair.value());
+            builder.field(FIELD_NAME, pair.name());
+            builder.field(FIELD_VALUE, pair.value());
             builder.endObject();
         }
         builder.endArray();
@@ -302,18 +290,5 @@ public class TSDBStatsResponseListener implements ActionListener<SearchResponse>
      * Simple record to hold name-value pairs.
      */
     private record NameValuePair(String name, long value) {
-    }
-
-    @Override
-    public void onFailure(Exception e) {
-        try {
-            XContentBuilder builder = channel.newErrorBuilder();
-            builder.startObject();
-            builder.field("error", e.getMessage());
-            builder.endObject();
-            channel.sendResponse(new BytesRestResponse(RestStatus.INTERNAL_SERVER_ERROR, builder));
-        } catch (IOException ioException) {
-            channel.sendResponse(new BytesRestResponse(RestStatus.INTERNAL_SERVER_ERROR, ioException.getMessage()));
-        }
     }
 }

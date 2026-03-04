@@ -18,10 +18,12 @@ import org.opensearch.test.rest.FakeRestChannel;
 import org.opensearch.test.rest.FakeRestRequest;
 import org.opensearch.tsdb.query.aggregator.InternalTSDBStats;
 import org.opensearch.tsdb.query.aggregator.InternalTimeSeries;
+import org.opensearch.tsdb.query.utils.TSDBStatsConstants;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -30,82 +32,117 @@ import static org.mockito.Mockito.when;
 
 /**
  * Unit tests for {@link TSDBStatsResponseListener}.
- *
- * <p>Test coverage includes:
- * <ul>
- *   <li>Response formatting (grouped and flat formats)</li>
- *   <li>Include options (headStats, labelStats, valueStats)</li>
- *   <li>Handling of null/empty data</li>
- *   <li>Error handling</li>
- * </ul>
  */
 public class TSDBStatsResponseListenerTests extends OpenSearchTestCase {
 
-    private static final String TEST_AGG_NAME = "tsdb_stats";
+    // ========== Shared Test Fixtures ==========
+
+    /** HeadStats: 508 series, 937 chunks */
+    private static final InternalTSDBStats.HeadStats HEAD_STATS = new InternalTSDBStats.HeadStats(
+        508L,
+        937L,
+        1591516800000L,
+        1598896800143L
+    );
+
+    /** HeadStats: small numbers for simple tests */
+    private static final InternalTSDBStats.HeadStats SIMPLE_HEAD_STATS = new InternalTSDBStats.HeadStats(100L, 200L, 1000L, 2000L);
+
+    /** Full stats: headStats + 2 labels (name, cluster) with multiple values, numSeries=25644 */
+    private static InternalTSDBStats createFullStats() {
+        Map<String, Long> nameValues = new LinkedHashMap<>();
+        nameValues.put("http_requests_total", 60L);
+        nameValues.put("http_request_duration_seconds", 40L);
+
+        Map<String, Long> clusterValues = new LinkedHashMap<>();
+        clusterValues.put("prod", 80L);
+        clusterValues.put("staging", 15L);
+        clusterValues.put("dev", 5L);
+
+        Map<String, InternalTSDBStats.CoordinatorLevelStats.LabelStats> labelStats = new HashMap<>();
+        labelStats.put("name", new InternalTSDBStats.CoordinatorLevelStats.LabelStats(100L, nameValues));
+        labelStats.put("cluster", new InternalTSDBStats.CoordinatorLevelStats.LabelStats(100L, clusterValues));
+
+        return InternalTSDBStats.forCoordinatorLevel(
+            TSDBStatsConstants.AGGREGATION_NAME,
+            HEAD_STATS,
+            new InternalTSDBStats.CoordinatorLevelStats(25644L, labelStats),
+            Map.of()
+        );
+    }
+
+    /** Simple stats: 1 label (cluster=prod:80), numSeries=500, optionally with headStats */
+    private static InternalTSDBStats createSimpleStats(InternalTSDBStats.HeadStats headStats) {
+        Map<String, InternalTSDBStats.CoordinatorLevelStats.LabelStats> labelStats = new HashMap<>();
+        labelStats.put("cluster", new InternalTSDBStats.CoordinatorLevelStats.LabelStats(100L, Map.of("prod", 80L)));
+
+        return InternalTSDBStats.forCoordinatorLevel(
+            TSDBStatsConstants.AGGREGATION_NAME,
+            headStats,
+            new InternalTSDBStats.CoordinatorLevelStats(500L, labelStats),
+            Map.of()
+        );
+    }
+
+    /** Empty stats: no labels, null numSeries */
+    private static InternalTSDBStats createEmptyStats() {
+        return InternalTSDBStats.forCoordinatorLevel(
+            TSDBStatsConstants.AGGREGATION_NAME,
+            null,
+            new InternalTSDBStats.CoordinatorLevelStats(null, new HashMap<>()),
+            Map.of()
+        );
+    }
+
+    /** Stats with null numSeries per label (for branch coverage) */
+    private static InternalTSDBStats createNullLabelNumSeriesStats() {
+        Map<String, InternalTSDBStats.CoordinatorLevelStats.LabelStats> labelStats = new HashMap<>();
+        labelStats.put("cluster", new InternalTSDBStats.CoordinatorLevelStats.LabelStats(null, Map.of("prod", 80L)));
+
+        return InternalTSDBStats.forCoordinatorLevel(
+            TSDBStatsConstants.AGGREGATION_NAME,
+            null,
+            new InternalTSDBStats.CoordinatorLevelStats(500L, labelStats),
+            Map.of()
+        );
+    }
+
+    /** Stats for testing sort order: 3 metrics with different counts */
+    private static InternalTSDBStats createSortingStats() {
+        Map<String, Long> nameValues = new LinkedHashMap<>();
+        nameValues.put("metric_a", 100L);
+        nameValues.put("metric_b", 500L);
+        nameValues.put("metric_c", 50L);
+
+        Map<String, InternalTSDBStats.CoordinatorLevelStats.LabelStats> labelStats = new HashMap<>();
+        labelStats.put("name", new InternalTSDBStats.CoordinatorLevelStats.LabelStats(650L, nameValues));
+
+        return InternalTSDBStats.forCoordinatorLevel(
+            TSDBStatsConstants.AGGREGATION_NAME,
+            null,
+            new InternalTSDBStats.CoordinatorLevelStats(650L, labelStats),
+            Map.of()
+        );
+    }
 
     // ========== Constructor Tests ==========
 
-    public void testConstructorWithGroupedFormat() {
-        // Arrange & Act
-        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
-        TSDBStatsResponseListener listener = new TSDBStatsResponseListener(channel, List.of(), "grouped");
+    public void testConstructorWithDifferentFormats() {
+        FakeRestChannel channel1 = new FakeRestChannel(new FakeRestRequest(), true, 1);
+        assertNotNull(new TSDBStatsResponseListener(channel1, List.of(), "grouped"));
 
-        // Assert
-        assertNotNull(listener);
-    }
+        FakeRestChannel channel2 = new FakeRestChannel(new FakeRestRequest(), true, 1);
+        assertNotNull(new TSDBStatsResponseListener(channel2, List.of(), "flat"));
 
-    public void testConstructorWithFlatFormat() {
-        // Arrange & Act
-        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
-        TSDBStatsResponseListener listener = new TSDBStatsResponseListener(channel, List.of(), "flat");
-
-        // Assert
-        assertNotNull(listener);
-    }
-
-    public void testConstructorWithIncludeOptions() {
-        // Arrange & Act
-        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
-        List<String> includeOptions = List.of("headStats", "labelStats");
-        TSDBStatsResponseListener listener = new TSDBStatsResponseListener(channel, includeOptions, "grouped");
-
-        // Assert
-        assertNotNull(listener);
+        FakeRestChannel channel3 = new FakeRestChannel(new FakeRestRequest(), true, 1);
+        assertNotNull(new TSDBStatsResponseListener(channel3, List.of("headStats", "labelValues"), "grouped"));
     }
 
     // ========== Grouped Format Tests ==========
 
     public void testGroupedFormatWithAllFields() throws IOException {
-        // Arrange
-        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
-        TSDBStatsResponseListener listener = new TSDBStatsResponseListener(channel, List.of(), "grouped");
+        RestResponse response = executeListener(createFullStats(), List.of("all"), "grouped");
 
-        // Create test data - same as flat format test to show different formatting
-        InternalTSDBStats.HeadStats headStats = new InternalTSDBStats.HeadStats(508L, 937L, 1591516800000L, 1598896800143L);
-
-        // Use LinkedHashMap to maintain insertion order for predictable test results
-        Map<String, Long> nameValues = new java.util.LinkedHashMap<>();
-        nameValues.put("http_requests_total", 60L);
-        nameValues.put("http_request_duration_seconds", 40L);
-
-        Map<String, Long> clusterValues = new java.util.LinkedHashMap<>();
-        clusterValues.put("prod", 80L);
-        clusterValues.put("staging", 15L);
-        clusterValues.put("dev", 5L);
-
-        Map<String, InternalTSDBStats.LabelStats> labelStats = new HashMap<>();
-        labelStats.put("name", new InternalTSDBStats.LabelStats(100L, nameValues));
-        labelStats.put("cluster", new InternalTSDBStats.LabelStats(100L, clusterValues));
-
-        InternalTSDBStats tsdbStats = new InternalTSDBStats("tsdb_stats", headStats, 25644L, labelStats, Map.of());
-        SearchResponse searchResponse = createSearchResponse(tsdbStats);
-
-        // Act
-        listener.onResponse(searchResponse);
-
-        // Assert
-        RestResponse response = channel.capturedResponse();
-        assertNotNull(response);
         assertEquals(RestStatus.OK, response.status());
 
         String expectedJson = """
@@ -138,31 +175,14 @@ public class TSDBStatsResponseListenerTests extends OpenSearchTestCase {
               }
             }
             """;
-
-        Map<String, Object> expected = parseJsonResponse(expectedJson);
-        Map<String, Object> actual = parseJsonResponse(response);
-        assertEquals(expected, actual);
+        assertEquals(parseJsonResponse(expectedJson), parseJsonResponse(response));
     }
 
-    public void testGroupedFormatWithoutHeadStats() throws IOException {
-        // Arrange
-        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
-        TSDBStatsResponseListener listener = new TSDBStatsResponseListener(channel, List.of("labelStats"), "grouped");
+    public void testGroupedFormatWithPartialFields() throws IOException {
+        // Without headStats (labelValues only)
+        RestResponse response1 = executeListener(createSimpleStats(null), List.of("labelValues"), "grouped");
 
-        Map<String, Long> clusterValues = Map.of("prod", 80L);
-        Map<String, InternalTSDBStats.LabelStats> labelStats = new HashMap<>();
-        labelStats.put("cluster", new InternalTSDBStats.LabelStats(100L, clusterValues));
-
-        InternalTSDBStats tsdbStats = new InternalTSDBStats("tsdb_stats", null, 500L, labelStats, Map.of());
-        SearchResponse searchResponse = createSearchResponse(tsdbStats);
-
-        // Act
-        listener.onResponse(searchResponse);
-
-        // Assert
-        RestResponse response = channel.capturedResponse();
-
-        String expectedJson = """
+        String expectedJson1 = """
             {
               "labelStats": {
                 "numSeries": 500,
@@ -173,31 +193,12 @@ public class TSDBStatsResponseListenerTests extends OpenSearchTestCase {
               }
             }
             """;
+        assertEquals(parseJsonResponse(expectedJson1), parseJsonResponse(response1));
 
-        Map<String, Object> expected = parseJsonResponse(expectedJson);
-        Map<String, Object> actual = parseJsonResponse(response);
-        assertEquals(expected, actual);
-    }
+        // Without valueStats (headStats + labelValues)
+        RestResponse response2 = executeListener(createSimpleStats(null), List.of("headStats", "labelValues"), "grouped");
 
-    public void testGroupedFormatWithoutValueStats() throws IOException {
-        // Arrange
-        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
-        TSDBStatsResponseListener listener = new TSDBStatsResponseListener(channel, List.of("headStats", "labelStats"), "grouped");
-
-        Map<String, Long> clusterValues = Map.of("prod", 80L);
-        Map<String, InternalTSDBStats.LabelStats> labelStats = new HashMap<>();
-        labelStats.put("cluster", new InternalTSDBStats.LabelStats(100L, clusterValues));
-
-        InternalTSDBStats tsdbStats = new InternalTSDBStats("tsdb_stats", null, 500L, labelStats, Map.of());
-        SearchResponse searchResponse = createSearchResponse(tsdbStats);
-
-        // Act
-        listener.onResponse(searchResponse);
-
-        // Assert
-        RestResponse response = channel.capturedResponse();
-
-        String expectedJson = """
+        String expectedJson2 = """
             {
               "labelStats": {
                 "numSeries": 500,
@@ -208,44 +209,24 @@ public class TSDBStatsResponseListenerTests extends OpenSearchTestCase {
               }
             }
             """;
+        assertEquals(parseJsonResponse(expectedJson2), parseJsonResponse(response2));
+    }
 
-        Map<String, Object> expected = parseJsonResponse(expectedJson);
-        Map<String, Object> actual = parseJsonResponse(response);
-        assertEquals(expected, actual);
+    public void testGroupedFormatWithNullLabelNumSeries() throws IOException {
+        RestResponse response = executeListener(createNullLabelNumSeriesStats(), List.of("all"), "grouped");
+
+        assertEquals(RestStatus.OK, response.status());
+        String content = response.content().utf8ToString();
+        // Verify top-level numSeries is present but per-label numSeries is not
+        assertTrue(content.contains("\"numSeries\":500"));
+        assertTrue(content.contains("\"cluster\""));
+        assertTrue(content.contains("\"prod\""));
     }
 
     // ========== Flat Format Tests ==========
 
     public void testFlatFormatWithAllFields() throws IOException {
-        // Arrange
-        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
-        TSDBStatsResponseListener listener = new TSDBStatsResponseListener(channel, List.of(), "flat");
-
-        // Create test data - same as grouped format test to show different formatting
-        InternalTSDBStats.HeadStats headStats = new InternalTSDBStats.HeadStats(508L, 937L, 1591516800000L, 1598896800143L);
-
-        // Use LinkedHashMap to maintain insertion order for predictable test results
-        Map<String, Long> nameValues = new java.util.LinkedHashMap<>();
-        nameValues.put("http_requests_total", 60L);
-        nameValues.put("http_request_duration_seconds", 40L);
-
-        Map<String, Long> clusterValues = new java.util.LinkedHashMap<>();
-        clusterValues.put("prod", 80L);
-        clusterValues.put("staging", 15L);
-        clusterValues.put("dev", 5L);
-
-        Map<String, InternalTSDBStats.LabelStats> labelStats = new HashMap<>();
-        labelStats.put("name", new InternalTSDBStats.LabelStats(100L, nameValues));
-        labelStats.put("cluster", new InternalTSDBStats.LabelStats(100L, clusterValues));
-
-        InternalTSDBStats tsdbStats = new InternalTSDBStats("tsdb_stats", headStats, 25644L, labelStats, Map.of());
-        SearchResponse searchResponse = createSearchResponse(tsdbStats);
-
-        // Act
-        listener.onResponse(searchResponse);
-
-        // Assert
-        RestResponse response = channel.capturedResponse();
+        RestResponse response = executeListener(createFullStats(), List.of("all"), "flat");
 
         String expectedJson = """
             {
@@ -276,74 +257,14 @@ public class TSDBStatsResponseListenerTests extends OpenSearchTestCase {
               ]
             }
             """;
-
-        Map<String, Object> expected = parseJsonResponse(expectedJson);
-        Map<String, Object> actual = parseJsonResponse(response);
-        assertEquals(expected, actual);
+        assertEquals(parseJsonResponse(expectedJson), parseJsonResponse(response));
     }
 
-    public void testFlatFormatWithoutValueStats() throws IOException {
-        // Arrange
-        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
-        TSDBStatsResponseListener listener = new TSDBStatsResponseListener(channel, List.of("headStats", "labelStats"), "flat");
+    public void testFlatFormatSortingAndPartialFields() throws IOException {
+        // Sorting by count (descending)
+        RestResponse response1 = executeListener(createSortingStats(), List.of("all"), "flat");
 
-        Map<String, Long> nameValues = Map.of("http_requests_total", 60L);
-        Map<String, InternalTSDBStats.LabelStats> labelStats = new HashMap<>();
-        labelStats.put("name", new InternalTSDBStats.LabelStats(100L, nameValues));
-
-        InternalTSDBStats tsdbStats = new InternalTSDBStats("tsdb_stats", null, 100L, labelStats, Map.of());
-        SearchResponse searchResponse = createSearchResponse(tsdbStats);
-
-        // Act
-        listener.onResponse(searchResponse);
-
-        // Assert
-        RestResponse response = channel.capturedResponse();
-
-        String expectedJson = """
-            {
-              "seriesCountByMetricName": [
-                {"name": "http_requests_total", "value": 60}
-              ],
-              "labelValueCountByLabelName": [
-                {"name": "name", "value": 1}
-              ],
-              "memoryInBytesByLabelName": [
-                {"name": "name", "value": 5640}
-              ]
-            }
-            """;
-
-        Map<String, Object> expected = parseJsonResponse(expectedJson);
-        Map<String, Object> actual = parseJsonResponse(response);
-        assertEquals(expected, actual);
-    }
-
-    public void testFlatFormatSortsMetricsByCount() throws IOException {
-        // Arrange
-        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
-        TSDBStatsResponseListener listener = new TSDBStatsResponseListener(channel, List.of(), "flat");
-
-        // Create metrics with different counts (should be sorted descending)
-        // Use LinkedHashMap to maintain insertion order for predictable test results
-        Map<String, Long> nameValues = new java.util.LinkedHashMap<>();
-        nameValues.put("metric_a", 100L);
-        nameValues.put("metric_b", 500L);
-        nameValues.put("metric_c", 50L);
-        Map<String, InternalTSDBStats.LabelStats> labelStats = new HashMap<>();
-        labelStats.put("name", new InternalTSDBStats.LabelStats(650L, nameValues));
-
-        InternalTSDBStats tsdbStats = new InternalTSDBStats("tsdb_stats", null, 650L, labelStats, Map.of());
-        SearchResponse searchResponse = createSearchResponse(tsdbStats);
-
-        // Act
-        listener.onResponse(searchResponse);
-
-        // Assert
-        RestResponse response = channel.capturedResponse();
-
-        // Verify sorted order: metric_b (500) > metric_a (100) > metric_c (50)
-        String expectedJson = """
+        String expectedJson1 = """
             {
               "seriesCountByMetricName": [
                 {"name": "metric_b", "value": 500},
@@ -363,159 +284,41 @@ public class TSDBStatsResponseListenerTests extends OpenSearchTestCase {
               ]
             }
             """;
+        assertEquals(parseJsonResponse(expectedJson1), parseJsonResponse(response1));
 
-        Map<String, Object> expected = parseJsonResponse(expectedJson);
-        Map<String, Object> actual = parseJsonResponse(response);
-        assertEquals(expected, actual);
-    }
+        // Without valueStats
+        Map<String, Long> nameValues = Map.of("http_requests_total", 60L);
+        Map<String, InternalTSDBStats.CoordinatorLevelStats.LabelStats> labelStats = new HashMap<>();
+        labelStats.put("name", new InternalTSDBStats.CoordinatorLevelStats.LabelStats(100L, nameValues));
+        InternalTSDBStats stats2 = InternalTSDBStats.forCoordinatorLevel(
+            TSDBStatsConstants.AGGREGATION_NAME,
+            null,
+            new InternalTSDBStats.CoordinatorLevelStats(100L, labelStats),
+            Map.of()
+        );
 
-    // ========== Edge Cases ==========
+        RestResponse response2 = executeListener(stats2, List.of("headStats", "labelValues"), "flat");
 
-    public void testEmptyLabelStats() throws IOException {
-        // Arrange
-        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
-        TSDBStatsResponseListener listener = new TSDBStatsResponseListener(channel, List.of(), "grouped");
-
-        InternalTSDBStats tsdbStats = new InternalTSDBStats("tsdb_stats", null, null, new HashMap<>(), Map.of());
-        SearchResponse searchResponse = createSearchResponse(tsdbStats);
-
-        // Act
-        listener.onResponse(searchResponse);
-
-        // Assert
-        RestResponse response = channel.capturedResponse();
-        assertEquals(RestStatus.OK, response.status());
-
-        String expectedJson = """
+        String expectedJson2 = """
             {
-              "labelStats": {}
+              "seriesCountByMetricName": [
+                {"name": "http_requests_total", "value": 60}
+              ],
+              "labelValueCountByLabelName": [
+                {"name": "name", "value": 1}
+              ],
+              "memoryInBytesByLabelName": [
+                {"name": "name", "value": 5640}
+              ]
             }
             """;
-
-        Map<String, Object> expected = parseJsonResponse(expectedJson);
-        Map<String, Object> actual = parseJsonResponse(response);
-        assertEquals(expected, actual);
-    }
-
-    public void testNullAggregations() throws IOException {
-        // Arrange
-        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
-        TSDBStatsResponseListener listener = new TSDBStatsResponseListener(channel, List.of(), "grouped");
-
-        SearchResponse searchResponse = mock(SearchResponse.class);
-        when(searchResponse.getAggregations()).thenReturn(null);
-
-        // Act
-        listener.onResponse(searchResponse);
-
-        // Assert
-        RestResponse response = channel.capturedResponse();
-        // Should return error when aggregations are null
-        assertEquals(RestStatus.INTERNAL_SERVER_ERROR, response.status());
-    }
-
-    public void testWrongAggregationType() throws IOException {
-        // Arrange
-        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
-        TSDBStatsResponseListener listener = new TSDBStatsResponseListener(channel, List.of(), "grouped");
-
-        // Create a different aggregation type (not InternalTSDBStats)
-        InternalTimeSeries wrongAgg = new InternalTimeSeries("tsdb_stats", new ArrayList<>(), Map.of());
-        SearchResponse searchResponse = mock(SearchResponse.class);
-        Aggregations aggregations = new Aggregations(List.of(wrongAgg));
-        when(searchResponse.getAggregations()).thenReturn(aggregations);
-
-        // Act
-        listener.onResponse(searchResponse);
-
-        // Assert
-        RestResponse response = channel.capturedResponse();
-        assertEquals(RestStatus.INTERNAL_SERVER_ERROR, response.status());
-
-        String expectedJson = """
-            {
-              "error": "Unexpected aggregation type"
-            }
-            """;
-
-        Map<String, Object> expected = parseJsonResponse(expectedJson);
-        Map<String, Object> actual = parseJsonResponse(response);
-        assertEquals(expected, actual);
-    }
-
-    // ========== Error Handling Tests ==========
-
-    public void testOnFailure() throws IOException {
-        // Arrange
-        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
-        TSDBStatsResponseListener listener = new TSDBStatsResponseListener(channel, List.of(), "grouped");
-
-        Exception exception = new RuntimeException("Test error");
-
-        // Act
-        listener.onFailure(exception);
-
-        // Assert
-        RestResponse response = channel.capturedResponse();
-        assertEquals(RestStatus.INTERNAL_SERVER_ERROR, response.status());
-
-        String expectedJson = """
-            {
-              "error": "Test error"
-            }
-            """;
-
-        Map<String, Object> expected = parseJsonResponse(expectedJson);
-        Map<String, Object> actual = parseJsonResponse(response);
-        assertEquals(expected, actual);
-    }
-
-    public void testOnResponseHandlesExceptions() throws IOException {
-        // Arrange
-        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
-        TSDBStatsResponseListener listener = new TSDBStatsResponseListener(channel, List.of(), "grouped");
-
-        // Create a mock that throws exception when getAggregations is called
-        SearchResponse searchResponse = mock(SearchResponse.class);
-        when(searchResponse.getAggregations()).thenThrow(new RuntimeException("Aggregations error"));
-
-        // Act
-        listener.onResponse(searchResponse);
-
-        // Assert
-        RestResponse response = channel.capturedResponse();
-        assertEquals(RestStatus.INTERNAL_SERVER_ERROR, response.status());
-
-        String expectedJson = """
-            {
-              "error": "Aggregations error"
-            }
-            """;
-
-        Map<String, Object> expected = parseJsonResponse(expectedJson);
-        Map<String, Object> actual = parseJsonResponse(response);
-        assertEquals(expected, actual);
+        assertEquals(parseJsonResponse(expectedJson2), parseJsonResponse(response2));
     }
 
     // ========== Include Options Tests ==========
 
     public void testIncludeOnlyHeadStats() throws IOException {
-        // Arrange
-        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
-        TSDBStatsResponseListener listener = new TSDBStatsResponseListener(channel, List.of("headStats"), "grouped");
-
-        InternalTSDBStats.HeadStats headStats = new InternalTSDBStats.HeadStats(100L, 200L, 1000L, 2000L);
-        Map<String, InternalTSDBStats.LabelStats> labelStats = new HashMap<>();
-        labelStats.put("cluster", new InternalTSDBStats.LabelStats(100L, Map.of("prod", 80L)));
-
-        InternalTSDBStats tsdbStats = new InternalTSDBStats("tsdb_stats", headStats, 500L, labelStats, Map.of());
-        SearchResponse searchResponse = createSearchResponse(tsdbStats);
-
-        // Act
-        listener.onResponse(searchResponse);
-
-        // Assert
-        RestResponse response = channel.capturedResponse();
+        RestResponse response = executeListener(createSimpleStats(SIMPLE_HEAD_STATS), List.of("headStats"), "grouped");
 
         String expectedJson = """
             {
@@ -527,31 +330,14 @@ public class TSDBStatsResponseListenerTests extends OpenSearchTestCase {
               }
             }
             """;
-
-        Map<String, Object> expected = parseJsonResponse(expectedJson);
-        Map<String, Object> actual = parseJsonResponse(response);
-        assertEquals(expected, actual);
+        assertEquals(parseJsonResponse(expectedJson), parseJsonResponse(response));
     }
 
-    public void testIncludeOnlyLabelStats() throws IOException {
-        // Arrange
-        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
-        TSDBStatsResponseListener listener = new TSDBStatsResponseListener(channel, List.of("labelStats"), "grouped");
+    public void testIncludeLabelStatsAndAll() throws IOException {
+        // Include only labelStats (no headStats, no valueStats)
+        RestResponse response1 = executeListener(createSimpleStats(SIMPLE_HEAD_STATS), List.of("labelValues"), "grouped");
 
-        InternalTSDBStats.HeadStats headStats = new InternalTSDBStats.HeadStats(100L, 200L, 1000L, 2000L);
-        Map<String, InternalTSDBStats.LabelStats> labelStats = new HashMap<>();
-        labelStats.put("cluster", new InternalTSDBStats.LabelStats(100L, Map.of("prod", 80L)));
-
-        InternalTSDBStats tsdbStats = new InternalTSDBStats("tsdb_stats", headStats, 500L, labelStats, Map.of());
-        SearchResponse searchResponse = createSearchResponse(tsdbStats);
-
-        // Act
-        listener.onResponse(searchResponse);
-
-        // Assert
-        RestResponse response = channel.capturedResponse();
-
-        String expectedJson = """
+        String expectedJson1 = """
             {
               "labelStats": {
                 "numSeries": 500,
@@ -562,31 +348,12 @@ public class TSDBStatsResponseListenerTests extends OpenSearchTestCase {
               }
             }
             """;
+        assertEquals(parseJsonResponse(expectedJson1), parseJsonResponse(response1));
 
-        Map<String, Object> expected = parseJsonResponse(expectedJson);
-        Map<String, Object> actual = parseJsonResponse(response);
-        assertEquals(expected, actual);
-    }
+        // Include all
+        RestResponse response2 = executeListener(createSimpleStats(SIMPLE_HEAD_STATS), List.of("all"), "grouped");
 
-    public void testEmptyIncludeOptionsIncludesAll() throws IOException {
-        // Arrange
-        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
-        TSDBStatsResponseListener listener = new TSDBStatsResponseListener(channel, List.of(), "grouped");
-
-        InternalTSDBStats.HeadStats headStats = new InternalTSDBStats.HeadStats(100L, 200L, 1000L, 2000L);
-        Map<String, InternalTSDBStats.LabelStats> labelStats = new HashMap<>();
-        labelStats.put("cluster", new InternalTSDBStats.LabelStats(100L, Map.of("prod", 80L)));
-
-        InternalTSDBStats tsdbStats = new InternalTSDBStats("tsdb_stats", headStats, 500L, labelStats, Map.of());
-        SearchResponse searchResponse = createSearchResponse(tsdbStats);
-
-        // Act
-        listener.onResponse(searchResponse);
-
-        // Assert
-        RestResponse response = channel.capturedResponse();
-
-        String expectedJson = """
+        String expectedJson2 = """
             {
               "headStats": {
                 "numSeries": 100,
@@ -606,45 +373,89 @@ public class TSDBStatsResponseListenerTests extends OpenSearchTestCase {
               }
             }
             """;
+        assertEquals(parseJsonResponse(expectedJson2), parseJsonResponse(response2));
+    }
 
-        Map<String, Object> expected = parseJsonResponse(expectedJson);
-        Map<String, Object> actual = parseJsonResponse(response);
-        assertEquals(expected, actual);
+    // ========== Edge Cases ==========
+
+    public void testEdgeCases() throws IOException {
+        // Empty label stats
+        RestResponse response1 = executeListener(createEmptyStats(), List.of("all"), "grouped");
+
+        assertEquals(RestStatus.OK, response1.status());
+        assertEquals(parseJsonResponse("{\"labelStats\":{}}"), parseJsonResponse(response1));
+
+        // Null aggregations
+        FakeRestChannel channel2 = new FakeRestChannel(new FakeRestRequest(), true, 1);
+        TSDBStatsResponseListener listener2 = new TSDBStatsResponseListener(channel2, List.of(), "grouped");
+
+        SearchResponse searchResponse2 = mock(SearchResponse.class);
+        when(searchResponse2.getAggregations()).thenReturn(null);
+        listener2.onResponse(searchResponse2);
+
+        assertEquals(RestStatus.INTERNAL_SERVER_ERROR, channel2.capturedResponse().status());
+
+        // Wrong aggregation type
+        FakeRestChannel channel3 = new FakeRestChannel(new FakeRestRequest(), true, 1);
+        TSDBStatsResponseListener listener3 = new TSDBStatsResponseListener(channel3, List.of(), "grouped");
+
+        InternalTimeSeries wrongAgg = new InternalTimeSeries(TSDBStatsConstants.AGGREGATION_NAME, new ArrayList<>(), Map.of());
+        SearchResponse searchResponse3 = mock(SearchResponse.class);
+        when(searchResponse3.getAggregations()).thenReturn(new Aggregations(List.of(wrongAgg)));
+        listener3.onResponse(searchResponse3);
+
+        RestResponse response3 = channel3.capturedResponse();
+        assertEquals(RestStatus.INTERNAL_SERVER_ERROR, response3.status());
+        assertEquals(parseJsonResponse("{\"error\":\"Unexpected aggregation type\"}"), parseJsonResponse(response3));
+    }
+
+    // ========== Error Handling Tests ==========
+
+    public void testErrorHandling() throws IOException {
+        // onFailure — delegated to RestToXContentListener, produces OpenSearch standard error format
+        FakeRestChannel channel1 = new FakeRestChannel(new FakeRestRequest(), true, 1);
+        TSDBStatsResponseListener listener1 = new TSDBStatsResponseListener(channel1, List.of(), "grouped");
+        listener1.onFailure(new RuntimeException("Test error"));
+
+        RestResponse response1 = channel1.capturedResponse();
+        assertEquals(RestStatus.INTERNAL_SERVER_ERROR, response1.status());
+
+        // onResponse handles exceptions via buildErrorResponse
+        FakeRestChannel channel2 = new FakeRestChannel(new FakeRestRequest(), true, 1);
+        TSDBStatsResponseListener listener2 = new TSDBStatsResponseListener(channel2, List.of(), "grouped");
+
+        SearchResponse searchResponse2 = mock(SearchResponse.class);
+        when(searchResponse2.getAggregations()).thenThrow(new RuntimeException("Aggregations error"));
+        listener2.onResponse(searchResponse2);
+
+        RestResponse response2 = channel2.capturedResponse();
+        assertEquals(RestStatus.INTERNAL_SERVER_ERROR, response2.status());
+        assertEquals(parseJsonResponse("{\"error\":\"Aggregations error\"}"), parseJsonResponse(response2));
     }
 
     // ========== Helper Methods ==========
 
-    /**
-     * Parses JSON response content into a Map for structured assertions.
-     *
-     * @param response the REST response containing JSON
-     * @return parsed JSON as a Map
-     * @throws IOException if parsing fails
-     */
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> parseJsonResponse(RestResponse response) throws IOException {
-        String content = response.content().utf8ToString();
-        return parseJsonResponse(content);
+    /** Executes a listener with the given stats, include options, and format, returning the response. */
+    private RestResponse executeListener(InternalTSDBStats tsdbStats, List<String> includeOptions, String format) throws IOException {
+        FakeRestChannel channel = new FakeRestChannel(new FakeRestRequest(), true, 1);
+        TSDBStatsResponseListener listener = new TSDBStatsResponseListener(channel, includeOptions, format);
+
+        SearchResponse searchResponse = mock(SearchResponse.class);
+        when(searchResponse.getAggregations()).thenReturn(new Aggregations(List.of(tsdbStats)));
+        listener.onResponse(searchResponse);
+
+        return channel.capturedResponse();
     }
 
-    /**
-     * Parses JSON string into a Map.
-     *
-     * @param jsonString the JSON string
-     * @return parsed JSON as a Map
-     * @throws IOException if parsing fails
-     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseJsonResponse(RestResponse response) throws IOException {
+        return parseJsonResponse(response.content().utf8ToString());
+    }
+
     @SuppressWarnings("unchecked")
     private Map<String, Object> parseJsonResponse(String jsonString) throws IOException {
         try (XContentParser parser = XContentType.JSON.xContent().createParser(xContentRegistry(), null, jsonString)) {
             return parser.map();
         }
-    }
-
-    private SearchResponse createSearchResponse(InternalTSDBStats tsdbStats) {
-        SearchResponse searchResponse = mock(SearchResponse.class);
-        Aggregations aggregations = new Aggregations(List.of(tsdbStats));
-        when(searchResponse.getAggregations()).thenReturn(aggregations);
-        return searchResponse;
     }
 }
