@@ -57,6 +57,7 @@ import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.UnionPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.ValueFilterPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.WherePlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.MockFetchPlanNode;
+import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.MockFetchLinePlanNode;
 import org.opensearch.tsdb.lang.m3.stage.MovingStage;
 import org.opensearch.tsdb.query.aggregator.TimeSeriesCoordinatorAggregationBuilder;
 import org.opensearch.tsdb.query.aggregator.TimeSeriesUnfoldAggregationBuilder;
@@ -1366,6 +1367,45 @@ public class SourceBuilderVisitorTests extends OpenSearchTestCase {
         // Should not throw and should handle truncation
         SourceBuilderVisitor.ComponentHolder result = truncateVisitor.visit(planNode);
         assertNotNull(result);
+    }
+
+    /**
+    * Test MockFetchLinePlanNode visitor creates MockFetchLineStage.
+    */
+    public void testMockFetchLinePlanNode() {
+        MockFetchLinePlanNode planNode = new MockFetchLinePlanNode(1, 100.0, Map.of("name", "test_metric", "env", "prod"));
+
+        SourceBuilderVisitor.ComponentHolder result = visitor.visit(planNode);
+        assertNotNull(result);
+        assertNotNull(result.getFullQuery());
+    }
+
+    /**
+     * Test MockFetchLinePlanNode with empty tags.
+     */
+    public void testMockFetchLinePlanNodeWithEmptyTags() {
+        MockFetchLinePlanNode planNode = new MockFetchLinePlanNode(1, 50.0, Map.of());
+
+        SourceBuilderVisitor.ComponentHolder result = visitor.visit(planNode);
+        assertNotNull(result);
+        assertNotNull(result.getFullQuery());
+    }
+
+    /**
+     * Test MockFetchLinePlanNode with stages already in stack.
+     * This tests that stages from the stack are properly added to coordinator stages.
+     */
+    public void testMockFetchLinePlanNodeWithScaleStage() {
+        // Create a plan that will have stages in the stack
+        // We'll use a Scale node wrapping a MockFetchLine node
+        MockFetchLinePlanNode mockFetchLine = new MockFetchLinePlanNode(2, 100.0, Map.of("name", "scaled_metric"));
+        ScalePlanNode scalePlan = new ScalePlanNode(1, 0.5);
+        scalePlan.addChild(mockFetchLine);
+
+        SourceBuilderVisitor.ComponentHolder result = visitor.visit(scalePlan);
+        assertNotNull(result);
+        assertNotNull(result.getFullQuery());
+        // The coordinator should have both MockFetchLineStage and ScaleStage
     }
 
     // ========== Metrics Tests ==========

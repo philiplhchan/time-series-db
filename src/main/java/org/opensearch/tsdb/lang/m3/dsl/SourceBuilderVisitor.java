@@ -53,6 +53,7 @@ import org.opensearch.tsdb.lang.m3.stage.MapKeyStage;
 import org.opensearch.tsdb.lang.m3.stage.MaxStage;
 import org.opensearch.tsdb.lang.m3.stage.MinStage;
 import org.opensearch.tsdb.lang.m3.stage.MockFetchStage;
+import org.opensearch.tsdb.lang.m3.stage.MockFetchLineStage;
 import org.opensearch.tsdb.lang.m3.stage.OffsetStage;
 import org.opensearch.tsdb.lang.m3.stage.MovingStage;
 import org.opensearch.tsdb.lang.m3.stage.PerSecondRateStage;
@@ -98,6 +99,7 @@ import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.LogarithmPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.M3PlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.MapKeyPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.MockFetchPlanNode;
+import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.MockFetchLinePlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.MovingPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.OffsetPlanNode;
 import org.opensearch.tsdb.lang.m3.m3ql.plan.nodes.PerSecondPlanNode;
@@ -459,6 +461,60 @@ public class SourceBuilderVisitor extends M3PlanVisitor<SourceBuilderVisitor.Com
                 EMPTY_MAP,  // No macros
                 Map.of(unfoldAggName, unfoldPath),  // Reference the unfold
                 unfoldAggName  // Use unfold as input (MockFetchStage will replace its data)
+            )
+        );
+
+        return holder;
+    }
+
+    @Override
+    public ComponentHolder visit(MockFetchLinePlanNode planNode) {
+        // Create MockFetchLineStage - generates constant horizontal line on coordinator
+        MockFetchLineStage mockFetchLineStage = new MockFetchLineStage(
+            planNode.getValue(),
+            planNode.getTags(),
+            params.startTime(),
+            params.endTime(),
+            params.step()
+        );
+
+        // Build coordinator stages: MockFetchLineStage followed by all accumulated pipeline stages
+        List<PipelineStage> coordinatorStages = new ArrayList<>();
+        coordinatorStages.add(mockFetchLineStage);
+        while (!stageStack.isEmpty()) {
+            coordinatorStages.add(stageStack.pop());
+        }
+
+        ComponentHolder holder = new ComponentHolder(planNode.getId());
+
+        // Use MatchNoneQueryBuilder to match 0 documents without scanning data.
+        // MockFetchLineStage generates synthetic data during coordinator reduce phase.
+        holder.addQuery(new MatchNoneQueryBuilder());
+
+        // Create a dummy TimeSeriesUnfoldAggregationBuilder as the parent aggregation
+        String unfoldAggName = planNode.getId() + "_unfold";
+        TimeSeriesUnfoldAggregationBuilder unfoldAgg = new TimeSeriesUnfoldAggregationBuilder(
+            unfoldAggName,
+            null,  // null stages - MockFetchLineStage will provide all the data
+            params.startTime(),
+            params.endTime(),
+            params.step()
+        );
+
+        // Wrap unfold in a filter aggregation with MatchNoneQueryBuilder
+        FilterAggregationBuilder filterAgg = new FilterAggregationBuilder(String.valueOf(planNode.getId()), new MatchNoneQueryBuilder());
+        filterAgg.subAggregation(unfoldAgg);
+        holder.addFilterAggregationBuilder(filterAgg);
+
+        // Add coordinator that references the unfold aggregation
+        String unfoldPath = planNode.getId() + ">" + unfoldAggName;
+        holder.addPipelineAggregationBuilder(
+            new TimeSeriesCoordinatorAggregationBuilder(
+                planNode.getId() + COORDINATOR_NAME_SUFFIX,
+                coordinatorStages,
+                EMPTY_MAP,  // No macros
+                Map.of(unfoldAggName, unfoldPath),  // Reference the unfold
+                unfoldAggName  // Use unfold as input (MockFetchLineStage will replace its data)
             )
         );
 

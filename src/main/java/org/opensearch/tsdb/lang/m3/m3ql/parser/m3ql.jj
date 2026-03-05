@@ -43,6 +43,10 @@ public class M3QLParser {
             return parser.parse(expandMacros);
         }
     }
+
+    private boolean isMockFetchSpaceSeparated(String functionName){
+     return "mockFetchLine".equals(functionName);
+    }
 }
 PARSER_END(M3QLParser)
 
@@ -52,8 +56,7 @@ SKIP : {
 
 // Default tokens, used for most of the parsing
 TOKEN : {
-    < NULL: "nan" >
-  | < IDENTIFIER: (["a"-"z", "_", "-", "A"-"Z", "0"-"9", "*", "."])+ (["a"-"z", "0"-"9", "_", "-", "A"-"Z", "*", "."])* >
+  < IDENTIFIER: (["a"-"z", "_", "-", "A"-"Z", "0"-"9", "*", "."])+ (["a"-"z", "0"-"9", "_", "-", "A"-"Z", "*", "."])* >
   | < OPERATOR: "<=" | "<" | "==" | "!=" | ">=" | ">" >
   | < SCIENTIFIC_NUMBER: (["0"-"9"])+ ("." (["0"-"9"])+)? (("e" | "E") ("+" | "-")? (["0"-"9"])+)? >
   | < STRING_LITERAL: ("\"") (~["\""])* ("\"") >
@@ -219,7 +222,8 @@ FunctionNode Function() :
     (
         LOOKAHEAD({ "alias".equals(token.image) }) AliasArgument(node)
       | LOOKAHEAD({ "fetch".equals(token.image) }) (LOOKAHEAD(2) Tag(node))*
-      | LOOKAHEAD({ "mockFetch".equals(token.image) }) MockFetchArguments(node)
+      | LOOKAHEAD({ "mockFetch".equals(token.image) }) MockFetchCommaSeparatedArguments(node)
+      | LOOKAHEAD({ isMockFetchSpaceSeparated(token.image) }) MockFetchSpaceSeparatedArguments(node)
       | (LOOKAHEAD(2) Argument(node))*
     )
     { return node; }
@@ -269,63 +273,39 @@ void AliasArgument(M3ASTNode parentNode) :
 
 }
 
-void MockFetchArguments(M3ASTNode parentNode) :
+void MockFetchCommaSeparatedArguments(M3ASTNode parentNode) :
+ {Token t;
+ }
 {
-    Token t;
-    Token sign = null;
-    StringBuilder numberStr = new StringBuilder();
-}
-{
-    // Parse comma-separated value arguments (numbers, possibly negative, or nan)
-    [
-        (
-            <NULL>
-            {
-                parentNode.addChildNode(new ValueNode("nan"));
-            }
-          |
-            [ sign = <OPERATOR> { if (!"-".equals(sign.image)) throw new ParseException("Expected '-' but got: " + sign.image); } ]
-            ( t = <SCIENTIFIC_NUMBER> | t = <IDENTIFIER> )
-            {
-                if (sign != null) {
-                    numberStr.append("-").append(t.image);
-                    parentNode.addChildNode(new ValueNode(numberStr.toString()));
-                    numberStr.setLength(0);
-                    sign = null;
-                } else {
-                    parentNode.addChildNode(new ValueNode(t.image));
-                }
-            }
-        )
-        (
-            <COMMA>
-            (
-                <NULL>
-                {
-                    parentNode.addChildNode(new ValueNode("nan"));
-                }
-              |
-                [ sign = <OPERATOR> { if (!"-".equals(sign.image)) throw new ParseException("Expected '-' but got: " + sign.image); } ]
-                ( t = <SCIENTIFIC_NUMBER> | t = <IDENTIFIER> )
-                {
-                    if (sign != null) {
-                        numberStr.append("-").append(t.image);
-                        parentNode.addChildNode(new ValueNode(numberStr.toString()));
-                        numberStr.setLength(0);
-                        sign = null;
-                    } else {
-                        parentNode.addChildNode(new ValueNode(t.image));
-                    }
-                }
-            )
-        )*
-    ]
-    // Then parse tags
-    (
-        LOOKAHEAD(2)
+   (
+    LOOKAHEAD(2, {getToken(1).kind == IDENTIFIER && getToken(2).kind == COLON})
         Tag((FunctionNode)parentNode)
-    )*
+    |
+      // comma separated input
+    ( t = <SCIENTIFIC_NUMBER> | t = <IDENTIFIER> )
+    { parentNode.addChildNode(new ValueNode(t.image)); }
+    (
+        <COMMA>
+         ( t = <SCIENTIFIC_NUMBER> | t = <IDENTIFIER> )
+         { parentNode.addChildNode(new ValueNode(t.image)); }
+     )*
+   )*
 }
+
+void MockFetchSpaceSeparatedArguments(M3ASTNode parentNode) :
+ {Token t;}
+{
+   (
+    LOOKAHEAD(2, {getToken(1).kind == IDENTIFIER && getToken(2).kind == COLON})
+        Tag((FunctionNode)parentNode)
+    |
+
+    ( t = <SCIENTIFIC_NUMBER> | t = <IDENTIFIER> )
+    { parentNode.addChildNode(new ValueNode(t.image)); }
+   )*
+}
+
+
 
 void Argument(M3ASTNode parentNode) :
 {
@@ -373,7 +353,7 @@ void Tag(FunctionNode parentNode) :
     TagKeyNode tagKeyNode = new TagKeyNode();
 }
 {
-    ( t = <IDENTIFIER> | t = <NULL> )
+    ( t = <IDENTIFIER>)
     <COLON>
     {
         tagKeyNode.setKeyName(t.image);

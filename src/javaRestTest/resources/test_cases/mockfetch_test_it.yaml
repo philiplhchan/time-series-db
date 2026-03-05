@@ -257,3 +257,76 @@ test_case:
         data:
           - metric: {name: "mockFetch"}
             values: [0, 1, 0, 2, 0]
+
+    # MockFetchLine tests - horizontal line (constant value)
+    - name: "mockFetchLine_basic_positive"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetchLine 10"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:05:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "mockFetchLine"}
+            values: [10, 10, 10, 10, 10]
+
+    - name: "mockFetchLine_with_tag"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetchLine 42.5 name:constant_line region:us-east"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:04:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "constant_line", region: "us-east"}
+            values: [42.5, 42.5, 42.5, 42.5]
+
+    - name: "mockFetchLine_negative_value"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetchLine -5.5 name:negative_line"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:03:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "negative_line"}
+            values: [-5.5, -5.5, -5.5]
+
+    - name: "mockFetchLine_with_scale"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetchLine 5 name:base | scale 3"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:03:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "base"}
+            values: [15, 15, 15]
+
+    - name: "mockFetchLine_union_two_lines"
+      type: "m3ql"
+      indices: "test_index"
+      query: "mockFetchLine 10 name:line1 | mockFetchLine 20 name:line2"
+      time_config:
+        min_timestamp: "2025-01-01T00:00:00Z"
+        max_timestamp: "2025-01-01T00:03:00Z"
+        step: "1m"
+      expected:
+        status: "success"
+        data:
+          - metric: {name: "line1"}
+            values: [10, 10, 10]
+          - metric: {name: "line2"}
+            values: [20, 20, 20]
