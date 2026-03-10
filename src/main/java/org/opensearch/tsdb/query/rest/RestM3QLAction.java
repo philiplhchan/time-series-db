@@ -256,7 +256,8 @@ public class RestM3QLAction extends BaseTSDBAction {
                         final String finalAggName = AggregationNameExtractor.getFinalAggregationName(searchSourceBuilder);
 
                         tags.put("reached_step", "search");
-                        client.search(
+                        executeSearch(
+                            client,
                             searchRequest,
                             new PromMatrixResponseListener(
                                 channel,

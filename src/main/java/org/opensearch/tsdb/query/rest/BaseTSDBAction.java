@@ -9,15 +9,24 @@ package org.opensearch.tsdb.query.rest;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.opensearch.action.search.SearchRequest;
+import org.opensearch.action.search.StreamSearchAction;
 import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.common.time.DateFormatter;
 import org.opensearch.common.time.DateMathParser;
 import org.opensearch.common.time.FormatNames;
+import org.opensearch.common.util.FeatureFlags;
+import org.opensearch.action.search.SearchResponse;
+import org.opensearch.core.action.ActionListener;
 import org.opensearch.rest.BaseRestHandler;
 import org.opensearch.rest.RestRequest;
+import org.opensearch.search.streaming.FlushModeResolver;
+import org.opensearch.transport.client.node.NodeClient;
 import org.opensearch.tsdb.TSDBPlugin;
 
 import java.time.Instant;
+
+import static org.opensearch.action.search.StreamSearchTransportService.STREAM_SEARCH_ENABLED;
 
 /**
  * Base class for TSDB query REST handlers (M3QL and PromQL).
@@ -65,6 +74,11 @@ public abstract class BaseTSDBAction extends BaseRestHandler {
     private volatile boolean ccsMinimizeRoundTrips;
 
     /**
+     * Volatile flag to track whether stream search is enabled cluster-wide.
+     */
+    private volatile boolean streamSearchEnabled;
+
+    /**
      * Constructs a new BaseTSDBAction handler.
      *
      * @param clusterSettings cluster settings for accessing dynamic cluster configurations
@@ -84,6 +98,12 @@ public abstract class BaseTSDBAction extends BaseRestHandler {
             boolean oldValue = this.ccsMinimizeRoundTrips;
             this.ccsMinimizeRoundTrips = newValue;
             logger.info("Updated tsdb_engine.query.ccs_minimize_roundtrips setting from {} to: {}", oldValue, newValue);
+        });
+
+        this.streamSearchEnabled = clusterSettings.get(STREAM_SEARCH_ENABLED);
+        clusterSettings.addSettingsUpdateConsumer(STREAM_SEARCH_ENABLED, newValue -> {
+            this.streamSearchEnabled = newValue;
+            logger.info("Updated stream.search.enabled setting to: {}", newValue);
         });
     }
 
@@ -122,5 +142,31 @@ public abstract class BaseTSDBAction extends BaseRestHandler {
         String timeString = request.param(paramName, defaultValue);
         Instant instant = DATE_MATH_PARSER.parse(timeString, () -> nowMillis);
         return instant.toEpochMilli();
+    }
+
+    /**
+     * Executes a search request, using streaming transport if eligible.
+     *
+     * <p>Uses {@link StreamSearchAction} when all of the following are true:
+     * <ul>
+     *   <li>{@code stream.search.enabled} cluster setting is true</li>
+     *   <li>{@link FeatureFlags#STREAM_TRANSPORT} feature flag is enabled</li>
+     *   <li>The aggregation tree is streamable (per {@link FlushModeResolver})</li>
+     * </ul>
+     * Otherwise falls back to the standard search path.
+     *
+     * @param client the node client
+     * @param searchRequest the search request to execute
+     * @param listener the action listener for the search response
+     */
+    protected void executeSearch(NodeClient client, SearchRequest searchRequest, ActionListener<SearchResponse> listener) {
+        if (streamSearchEnabled
+            && FeatureFlags.isEnabled(FeatureFlags.STREAM_TRANSPORT)
+            && FlushModeResolver.isStreamable(searchRequest.source().aggregations())) {
+            logger.debug("Using stream search for TSDB query");
+            client.execute(StreamSearchAction.INSTANCE, searchRequest, listener);
+        } else {
+            client.search(searchRequest, listener);
+        }
     }
 }
