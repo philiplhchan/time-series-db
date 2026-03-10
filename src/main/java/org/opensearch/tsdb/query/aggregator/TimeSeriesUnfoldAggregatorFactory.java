@@ -13,6 +13,8 @@ import org.opensearch.search.aggregations.AggregatorFactories;
 import org.opensearch.search.aggregations.AggregatorFactory;
 import org.opensearch.search.aggregations.CardinalityUpperBound;
 import org.opensearch.search.internal.SearchContext;
+import org.opensearch.search.streaming.StreamingCostEstimable;
+import org.opensearch.search.streaming.StreamingCostMetrics;
 import org.opensearch.tsdb.query.stage.UnaryPipelineStage;
 
 import java.io.IOException;
@@ -39,7 +41,15 @@ import java.util.Map;
  *       for result processing</li>
  * </ul>
  */
-public class TimeSeriesUnfoldAggregatorFactory extends AggregatorFactory {
+public class TimeSeriesUnfoldAggregatorFactory extends AggregatorFactory implements StreamingCostEstimable {
+
+    /**
+     * Conservative estimate of per-segment bucket count for streaming cost decisions.
+     * Time series aggregations return all matching series per segment without topN limiting,
+     * so we use a fixed estimate. This value allows streaming for typical workloads while
+     * the max_estimated_bucket_count setting (default 100,000) provides a safety cap.
+     */
+    private static final int STREAMING_COST_ESTIMATE = 1000;
 
     private final List<UnaryPipelineStage> stages;
     private final long minTimestamp;
@@ -97,6 +107,14 @@ public class TimeSeriesUnfoldAggregatorFactory extends AggregatorFactory {
             step,
             metadata
         );
+    }
+
+    @Override
+    public StreamingCostMetrics estimateStreamingCost(SearchContext searchContext) {
+        if (stages != null && !stages.isEmpty() && !stages.stream().allMatch(UnaryPipelineStage::supportConcurrentSegmentSearch)) {
+            return StreamingCostMetrics.nonStreamable();
+        }
+        return new StreamingCostMetrics(true, STREAMING_COST_ESTIMATE);
     }
 
     @Override

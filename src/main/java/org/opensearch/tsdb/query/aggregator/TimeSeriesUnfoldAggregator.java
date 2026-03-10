@@ -535,6 +535,15 @@ public class TimeSeriesUnfoldAggregator extends BucketsAggregator {
         timeSeriesByBucket.clear();
     }
 
+    @Override
+    public void doReset() {
+        // Clear batch-local state between segments for PER_SEGMENT streaming.
+        // Query-lifetime state (executionStats, circuitBreakerBytes) is intentionally
+        // preserved across segments for accurate aggregate metrics and breaker tracking.
+        timeSeriesByBucket.clear();
+        processedTimeSeriesByBucket.clear();
+    }
+
     // ==================== Circuit Breaker Tracking ====================
 
     /**
