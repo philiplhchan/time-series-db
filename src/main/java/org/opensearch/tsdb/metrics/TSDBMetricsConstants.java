@@ -141,6 +141,21 @@ public final class TSDBMetricsConstants {
     /** Histogram: Number of time series returned per query */
     public static final String AGGREGATION_SERIES_TOTAL = "tsdb.aggregation.series.total";
 
+    /** Histogram: Number of input time series seen by coordinator reduce */
+    public static final String AGGREGATION_COORD_INPUT_SERIES = "tsdb.aggregation.coord.input.series";
+
+    /** Histogram: Number of input samples seen by coordinator reduce */
+    public static final String AGGREGATION_COORD_INPUT_SAMPLES = "tsdb.aggregation.coord.input.samples";
+
+    /** Histogram: Number of output time series produced by coordinator reduce */
+    public static final String AGGREGATION_COORD_OUTPUT_SERIES = "tsdb.aggregation.coord.output.series";
+
+    /** Histogram: Number of output samples produced by coordinator reduce */
+    public static final String AGGREGATION_COORD_OUTPUT_SAMPLES = "tsdb.aggregation.coord.output.samples";
+
+    /** Counter: Total coordinator reduce results (tagged with status: empty or hits) */
+    public static final String AGGREGATION_COORD_RESULTS_TOTAL = "tsdb.aggregation.coord.results.total";
+
     /** Histogram: Circuit breaker MiB tracked per aggregation request */
     public static final String AGGREGATION_CIRCUIT_BREAKER_MIB = "tsdb.aggregation.circuit_breaker.mib";
 
@@ -325,6 +340,16 @@ public final class TSDBMetricsConstants {
     public static final String AGGREGATION_CHUNKS_FOR_DOC_ERRORS_TOTAL_DESC = "Total errors in chunksForDoc() operations";
     public static final String AGGREGATION_RESULTS_TOTAL_DESC = "Total queries tagged by result status (empty or hits)";
     public static final String AGGREGATION_SERIES_TOTAL_DESC = "Number of time series returned per query";
+    public static final String AGGREGATION_COORD_INPUT_SERIES_DESC =
+        "Number of input time series derived from InternalTimeSeries shard responses on the coordinator";
+    public static final String AGGREGATION_COORD_INPUT_SAMPLES_DESC =
+        "Number of input samples derived from InternalTimeSeries shard responses on the coordinator";
+    public static final String AGGREGATION_COORD_OUTPUT_SERIES_DESC =
+        "Number of output time series produced by coordinator reduction from InternalTimeSeries payloads";
+    public static final String AGGREGATION_COORD_OUTPUT_SAMPLES_DESC =
+        "Number of output samples produced by coordinator reduction from InternalTimeSeries payloads";
+    public static final String AGGREGATION_COORD_RESULTS_TOTAL_DESC =
+        "Total coordinator reduce results tagged by result status (empty or hits)";
     public static final String AGGREGATION_CIRCUIT_BREAKER_MIB_DESC =
         "Circuit breaker MiB tracked per aggregation request (measures memory usage)";
     public static final String AGGREGATION_CIRCUIT_BREAKER_TRIPS_TOTAL_DESC = "Total circuit breaker trips when memory limit exceeded";

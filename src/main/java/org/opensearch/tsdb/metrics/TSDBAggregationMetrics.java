@@ -57,6 +57,21 @@ public class TSDBAggregationMetrics {
     /** Histogram for number of series returned per query */
     public Histogram seriesTotal;
 
+    /** Histogram for number of input series seen by coordinator reduce */
+    public Histogram coordInputSeries;
+
+    /** Histogram for number of input samples seen by coordinator reduce */
+    public Histogram coordInputSamples;
+
+    /** Histogram for number of output series produced by coordinator reduce */
+    public Histogram coordOutputSeries;
+
+    /** Histogram for number of output samples produced by coordinator reduce */
+    public Histogram coordOutputSamples;
+
+    /** Counter for coordinator reduce results (tagged with status: empty or hits) */
+    public Counter coordResultsTotal;
+
     /** Histogram for circuit breaker MiB tracked per aggregation request */
     public Histogram circuitBreakerMiB;
 
@@ -140,6 +155,31 @@ public class TSDBAggregationMetrics {
             TSDBMetricsConstants.AGGREGATION_SERIES_TOTAL_DESC,
             TSDBMetricsConstants.UNIT_COUNT
         );
+        coordInputSeries = registry.createHistogram(
+            TSDBMetricsConstants.AGGREGATION_COORD_INPUT_SERIES,
+            TSDBMetricsConstants.AGGREGATION_COORD_INPUT_SERIES_DESC,
+            TSDBMetricsConstants.UNIT_COUNT
+        );
+        coordInputSamples = registry.createHistogram(
+            TSDBMetricsConstants.AGGREGATION_COORD_INPUT_SAMPLES,
+            TSDBMetricsConstants.AGGREGATION_COORD_INPUT_SAMPLES_DESC,
+            TSDBMetricsConstants.UNIT_COUNT
+        );
+        coordOutputSeries = registry.createHistogram(
+            TSDBMetricsConstants.AGGREGATION_COORD_OUTPUT_SERIES,
+            TSDBMetricsConstants.AGGREGATION_COORD_OUTPUT_SERIES_DESC,
+            TSDBMetricsConstants.UNIT_COUNT
+        );
+        coordOutputSamples = registry.createHistogram(
+            TSDBMetricsConstants.AGGREGATION_COORD_OUTPUT_SAMPLES,
+            TSDBMetricsConstants.AGGREGATION_COORD_OUTPUT_SAMPLES_DESC,
+            TSDBMetricsConstants.UNIT_COUNT
+        );
+        coordResultsTotal = registry.createCounter(
+            TSDBMetricsConstants.AGGREGATION_COORD_RESULTS_TOTAL,
+            TSDBMetricsConstants.AGGREGATION_COORD_RESULTS_TOTAL_DESC,
+            TSDBMetricsConstants.UNIT_COUNT
+        );
         circuitBreakerMiB = registry.createHistogram(
             TSDBMetricsConstants.AGGREGATION_CIRCUIT_BREAKER_MIB,
             TSDBMetricsConstants.AGGREGATION_CIRCUIT_BREAKER_MIB_DESC,
@@ -175,6 +215,11 @@ public class TSDBAggregationMetrics {
         chunksForDocErrors = null;
         resultsTotal = null;
         seriesTotal = null;
+        coordInputSeries = null;
+        coordInputSamples = null;
+        coordOutputSeries = null;
+        coordOutputSamples = null;
+        coordResultsTotal = null;
         circuitBreakerMiB = null;
         circuitBreakerTrips = null;
         pipelineStageLatency = null;

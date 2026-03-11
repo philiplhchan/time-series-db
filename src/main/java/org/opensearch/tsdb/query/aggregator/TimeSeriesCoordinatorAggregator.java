@@ -27,10 +27,12 @@ import org.opensearch.tsdb.core.model.SampleList;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.LongConsumer;
 
 import org.opensearch.tsdb.query.breaker.ReduceCircuitBreakerConsumer;
@@ -58,6 +60,9 @@ public class TimeSeriesCoordinatorAggregator extends SiblingPipelineAggregator {
     private final Map<String, String> references; // Named references to bucket paths
     private final String inputReference; // Which reference to use as primary input
     private final LinkedHashMap<String, MacroDefinition> macroDefinitions; // Macro definitions (order-preserving for evaluation order)
+
+    private record ResolvedReference(String refName, String bucketsPath, List<TimeSeries> timeSeries) {
+    }
 
     /**
      * Represents a macro definition with a name, pipeline stages, and input reference.
@@ -271,8 +276,12 @@ public class TimeSeriesCoordinatorAggregator extends SiblingPipelineAggregator {
     @Override
     public InternalAggregation doReduce(Aggregations aggregations, ReduceContext context) {
         try (ReduceCircuitBreakerConsumer cbConsumer = ReduceCircuitBreakerConsumer.createConsumer(context)) {
+            Map<String, ResolvedReference> resolvedReferences = extractReferenceResults(aggregations);
+            CoordinatorStats coordinatorStats = new CoordinatorStats();
+            recordCoordinatorInputs(coordinatorStats, resolvedReferences);
+
             // Execute the main pipeline stages, with macro support if macros are defined
-            List<TimeSeries> result = processMainPipeline(aggregations, cbConsumer);
+            List<TimeSeries> result = processMainPipeline(resolvedReferences, cbConsumer);
 
             // Track final result size for OOM protection (list + all time series)
             if (result != null && !result.isEmpty()) {
@@ -283,6 +292,9 @@ public class TimeSeriesCoordinatorAggregator extends SiblingPipelineAggregator {
                 cbConsumer.accept(resultBytes);
             }
 
+            coordinatorStats.addOutput(result);
+            coordinatorStats.recordMetrics();
+
             return new InternalTimeSeries(name(), result, metadata());
         }
     }
@@ -291,12 +303,14 @@ public class TimeSeriesCoordinatorAggregator extends SiblingPipelineAggregator {
      * Process the main pipeline stages, with support for macro references.
      * Macros are definitions that can be referenced by stages in the main pipeline.
      *
-     * @param aggregations the aggregations to process
+     * @param resolvedReferences the resolved reference results to process
      * @param cbConsumer optional circuit breaker consumer for memory tracking
      */
-    private List<TimeSeries> processMainPipeline(Aggregations aggregations, LongConsumer cbConsumer) {
-        // Extract referenced pipeline results using buckets_path
-        Map<String, List<TimeSeries>> availableReferences = extractReferenceResults(aggregations);
+    private List<TimeSeries> processMainPipeline(Map<String, ResolvedReference> resolvedReferences, LongConsumer cbConsumer) {
+        Map<String, List<TimeSeries>> availableReferences = new LinkedHashMap<>(resolvedReferences.size());
+        for (ResolvedReference resolvedReference : resolvedReferences.values()) {
+            availableReferences.put(resolvedReference.refName(), resolvedReference.timeSeries());
+        }
 
         // If we have macro definitions, evaluate them and append results to available references
         if (!macroDefinitions.isEmpty()) {
@@ -350,8 +364,8 @@ public class TimeSeriesCoordinatorAggregator extends SiblingPipelineAggregator {
      * Extract reference results from aggregations using bucket paths.
      * Only extracts results for actual aggregations, not macro references.
      */
-    private Map<String, List<TimeSeries>> extractReferenceResults(Aggregations aggregations) {
-        Map<String, List<TimeSeries>> referenceResults = new LinkedHashMap<>(references.size());
+    private Map<String, ResolvedReference> extractReferenceResults(Aggregations aggregations) {
+        Map<String, ResolvedReference> referenceResults = new LinkedHashMap<>(references.size());
         for (Map.Entry<String, String> entry : references.entrySet()) {
             String refName = entry.getKey();
             String bucketsPath = entry.getValue();
@@ -396,7 +410,7 @@ public class TimeSeriesCoordinatorAggregator extends SiblingPipelineAggregator {
             // Extract time series from the final pipeline aggregation
             if (currentAgg instanceof TimeSeriesProvider provider) {
                 List<TimeSeries> timeSeries = provider.getTimeSeries();
-                referenceResults.put(refName, timeSeries);
+                referenceResults.put(refName, new ResolvedReference(refName, bucketsPath, timeSeries));
             } else {
                 throw new IllegalArgumentException(
                     "Referenced aggregation '"
@@ -407,6 +421,25 @@ public class TimeSeriesCoordinatorAggregator extends SiblingPipelineAggregator {
             }
         }
         return referenceResults;
+    }
+
+    private void recordCoordinatorInputs(CoordinatorStats coordinatorStats, Map<String, ResolvedReference> resolvedReferences) {
+        Set<String> countedPaths = new LinkedHashSet<>();
+        for (ResolvedReference resolvedReference : resolvedReferences.values()) {
+            if (countedPaths.add(resolvedReference.bucketsPath())) {
+                coordinatorStats.addInput(resolvedReference.timeSeries());
+            }
+        }
+    }
+
+    boolean referencesAggregation(String aggregationName) {
+        for (String bucketsPath : references.values()) {
+            String[] pathElements = bucketsPath.split(AggregationConstants.BUCKETS_PATH_SEPARATOR);
+            if (pathElements.length > 0 && pathElements[pathElements.length - 1].equals(aggregationName)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

@@ -9,6 +9,10 @@ package org.opensearch.tsdb.query.aggregator;
 
 import org.opensearch.common.xcontent.XContentFactory;
 import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.telemetry.metrics.Counter;
+import org.opensearch.telemetry.metrics.Histogram;
+import org.opensearch.telemetry.metrics.MetricsRegistry;
+import org.opensearch.telemetry.metrics.tags.Tags;
 import org.opensearch.search.aggregations.InternalAggregation;
 import org.opensearch.search.aggregations.pipeline.PipelineAggregator;
 import org.opensearch.test.OpenSearchTestCase;
@@ -18,15 +22,26 @@ import org.opensearch.tsdb.core.model.Labels;
 import org.opensearch.tsdb.core.model.Sample;
 import org.opensearch.tsdb.core.model.SumCountSample;
 import org.opensearch.tsdb.lang.m3.stage.SumStage;
+import org.opensearch.tsdb.metrics.TSDBMetrics;
 import org.opensearch.tsdb.query.stage.UnaryPipelineStage;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.hamcrest.Matchers.equalTo;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyDouble;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.assertArg;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 public class InternalTimeSeriesTests extends OpenSearchTestCase {
 
@@ -586,7 +601,163 @@ public class InternalTimeSeriesTests extends OpenSearchTestCase {
         // The reduce stage may not be directly serialized in XContent, but should not cause errors
     }
 
+    public void testFinalReduceEmitsCoordinatorMetricsForRawFetch() {
+        Histogram coordInputSeries = mock(Histogram.class);
+        Histogram coordInputSamples = mock(Histogram.class);
+        Histogram coordOutputSeries = mock(Histogram.class);
+        Histogram coordOutputSamples = mock(Histogram.class);
+        Counter coordResultsTotal = mock(Counter.class);
+        initializeCoordinatorMetrics(coordInputSeries, coordInputSamples, coordOutputSeries, coordOutputSamples, coordResultsTotal);
+
+        try {
+            InternalTimeSeries agg1 = new InternalTimeSeries(TEST_NAME, createTestTimeSeries(), TEST_METADATA);
+            InternalTimeSeries agg2 = new InternalTimeSeries(TEST_NAME, createDifferentTestTimeSeries(), TEST_METADATA);
+            List<InternalAggregation> aggregations = List.of(agg1, agg2);
+
+            InternalAggregation result = agg1.reduce(aggregations, createFinalReduceContext(Collections.emptyList()));
+
+            assertTrue(result instanceof InternalTimeSeries);
+            InternalTimeSeries reduced = (InternalTimeSeries) result;
+
+            verify(coordInputSeries).record(eq(3.0), eq(Tags.EMPTY));
+            verify(coordInputSamples).record(eq(8.0), eq(Tags.EMPTY));
+            verify(coordOutputSeries).record(eq((double) reduced.getTimeSeries().size()), eq(Tags.EMPTY));
+            verify(coordOutputSamples).record(eq((double) countSamples(reduced.getTimeSeries())), eq(Tags.EMPTY));
+            verify(coordResultsTotal).add(
+                eq(1.0),
+                assertArg(tags -> { assertThat(tags.getTagsMap(), equalTo(Map.of("status", "hits"))); })
+            );
+        } finally {
+            TSDBMetrics.cleanup();
+        }
+    }
+
+    public void testPartialReduceDoesNotEmitCoordinatorMetrics() {
+        Histogram coordInputSeries = mock(Histogram.class);
+        Histogram coordInputSamples = mock(Histogram.class);
+        Histogram coordOutputSeries = mock(Histogram.class);
+        Histogram coordOutputSamples = mock(Histogram.class);
+        Counter coordResultsTotal = mock(Counter.class);
+        initializeCoordinatorMetrics(coordInputSeries, coordInputSamples, coordOutputSeries, coordOutputSamples, coordResultsTotal);
+
+        try {
+            InternalTimeSeries internal = new InternalTimeSeries(TEST_NAME, createTestTimeSeries(), TEST_METADATA);
+            internal.reduce(List.of(internal), createPartialReduceContext());
+
+            verify(coordInputSeries, never()).record(anyDouble(), any(Tags.class));
+            verify(coordInputSamples, never()).record(anyDouble(), any(Tags.class));
+            verify(coordOutputSeries, never()).record(anyDouble(), any(Tags.class));
+            verify(coordOutputSamples, never()).record(anyDouble(), any(Tags.class));
+            verify(coordResultsTotal, never()).add(eq(1.0), any(Tags.class));
+        } finally {
+            TSDBMetrics.cleanup();
+        }
+    }
+
+    public void testFinalReduceDoesNotEmitWhenCoordinatorPipelineReferencesAggregation() {
+        Histogram coordInputSeries = mock(Histogram.class);
+        Histogram coordInputSamples = mock(Histogram.class);
+        Histogram coordOutputSeries = mock(Histogram.class);
+        Histogram coordOutputSamples = mock(Histogram.class);
+        Counter coordResultsTotal = mock(Counter.class);
+        initializeCoordinatorMetrics(coordInputSeries, coordInputSamples, coordOutputSeries, coordOutputSamples, coordResultsTotal);
+
+        try {
+            InternalTimeSeries internal = new InternalTimeSeries(TEST_NAME, createTestTimeSeries(), TEST_METADATA);
+            TimeSeriesCoordinatorAggregator coordinatorAggregator = new TimeSeriesCoordinatorAggregator(
+                "coord",
+                new String[0],
+                Collections.emptyList(),
+                new LinkedHashMap<>(),
+                Map.of("a", TEST_NAME),
+                "a",
+                Map.of()
+            );
+
+            internal.reduce(List.of(internal), createFinalReduceContext(List.of(coordinatorAggregator)));
+
+            verify(coordInputSeries, never()).record(anyDouble(), any(Tags.class));
+            verify(coordInputSamples, never()).record(anyDouble(), any(Tags.class));
+            verify(coordOutputSeries, never()).record(anyDouble(), any(Tags.class));
+            verify(coordOutputSamples, never()).record(anyDouble(), any(Tags.class));
+            verify(coordResultsTotal, never()).add(eq(1.0), any(Tags.class));
+        } finally {
+            TSDBMetrics.cleanup();
+        }
+    }
+
+    public void testFinalReduceWithReduceStageEmitsCoordinatorMetrics() {
+        Histogram coordInputSeries = mock(Histogram.class);
+        Histogram coordInputSamples = mock(Histogram.class);
+        Histogram coordOutputSeries = mock(Histogram.class);
+        Histogram coordOutputSamples = mock(Histogram.class);
+        Counter coordResultsTotal = mock(Counter.class);
+        initializeCoordinatorMetrics(coordInputSeries, coordInputSamples, coordOutputSeries, coordOutputSamples, coordResultsTotal);
+
+        try {
+            UnaryPipelineStage sumStage = new SumStage("service");
+            InternalTimeSeries agg1 = new InternalTimeSeries(TEST_NAME, createTestTimeSeries(), TEST_METADATA, sumStage);
+            InternalTimeSeries agg2 = new InternalTimeSeries(TEST_NAME, createDifferentTestTimeSeries(), TEST_METADATA, sumStage);
+
+            InternalAggregation result = agg1.reduce(List.of(agg1, agg2), createFinalReduceContext(Collections.emptyList()));
+
+            assertTrue(result instanceof InternalTimeSeries);
+            InternalTimeSeries reduced = (InternalTimeSeries) result;
+            verify(coordInputSeries).record(eq(3.0), eq(Tags.EMPTY));
+            verify(coordInputSamples).record(eq(8.0), eq(Tags.EMPTY));
+            verify(coordOutputSeries).record(eq((double) reduced.getTimeSeries().size()), eq(Tags.EMPTY));
+            verify(coordOutputSamples).record(eq((double) countSamples(reduced.getTimeSeries())), eq(Tags.EMPTY));
+            verify(coordResultsTotal).add(
+                eq(1.0),
+                assertArg(tags -> { assertThat(tags.getTagsMap(), equalTo(Map.of("status", "hits"))); })
+            );
+        } finally {
+            TSDBMetrics.cleanup();
+        }
+    }
+
     // ========== Helper Methods ==========
+
+    private void initializeCoordinatorMetrics(
+        Histogram coordInputSeries,
+        Histogram coordInputSamples,
+        Histogram coordOutputSeries,
+        Histogram coordOutputSamples,
+        Counter coordResultsTotal
+    ) {
+        MetricsRegistry registry = mock(MetricsRegistry.class);
+        when(registry.createCounter(anyString(), anyString(), anyString())).thenReturn(mock(Counter.class));
+        when(registry.createHistogram(anyString(), anyString(), anyString())).thenReturn(mock(Histogram.class));
+
+        TSDBMetrics.cleanup();
+        TSDBMetrics.initialize(registry);
+        TSDBMetrics.AGGREGATION.coordInputSeries = coordInputSeries;
+        TSDBMetrics.AGGREGATION.coordInputSamples = coordInputSamples;
+        TSDBMetrics.AGGREGATION.coordOutputSeries = coordOutputSeries;
+        TSDBMetrics.AGGREGATION.coordOutputSamples = coordOutputSamples;
+        TSDBMetrics.AGGREGATION.coordResultsTotal = coordResultsTotal;
+    }
+
+    private InternalAggregation.ReduceContext createFinalReduceContext(List<PipelineAggregator> rootAggregators) {
+        PipelineAggregator.PipelineTree emptyPipelineTree = new PipelineAggregator.PipelineTree(Collections.emptyMap(), rootAggregators);
+        return InternalAggregation.ReduceContext.forFinalReduction(null, null, (s) -> {}, emptyPipelineTree);
+    }
+
+    private InternalAggregation.ReduceContext createPartialReduceContext() {
+        PipelineAggregator.PipelineTree emptyPipelineTree = new PipelineAggregator.PipelineTree(
+            Collections.emptyMap(),
+            Collections.emptyList()
+        );
+        return InternalAggregation.ReduceContext.forPartialReduction(null, null, () -> emptyPipelineTree);
+    }
+
+    private long countSamples(List<TimeSeries> timeSeries) {
+        long sampleCount = 0;
+        for (TimeSeries series : timeSeries) {
+            sampleCount += series.getSamples().size();
+        }
+        return sampleCount;
+    }
 
     private List<TimeSeries> createTestTimeSeries() {
         List<TimeSeries> timeSeries = new ArrayList<>();

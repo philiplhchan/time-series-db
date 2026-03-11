@@ -11,6 +11,7 @@ import org.opensearch.core.common.io.stream.StreamInput;
 import org.opensearch.core.common.io.stream.StreamOutput;
 import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.search.aggregations.InternalAggregation;
+import org.opensearch.search.aggregations.pipeline.PipelineAggregator;
 import org.opensearch.tsdb.core.model.ByteLabels;
 import org.opensearch.tsdb.core.model.Labels;
 import org.opensearch.tsdb.core.model.Sample;
@@ -240,6 +241,7 @@ public class InternalTimeSeries extends InternalAggregation implements TimeSerie
      */
     @Override
     public InternalAggregation reduce(List<InternalAggregation> aggregations, ReduceContext reduceContext) {
+        CoordinatorStats coordinatorStats = shouldRecordCoordinatorMetrics(reduceContext) ? new CoordinatorStats() : null;
         try (ReduceCircuitBreakerConsumer cbConsumer = ReduceCircuitBreakerConsumer.createConsumer(reduceContext)) {
             // If we have a reduce stage, delegate directly to it (skip merging)
             if (reduceStage != null) {
@@ -252,11 +254,20 @@ public class InternalTimeSeries extends InternalAggregation implements TimeSerie
                     if (!(agg instanceof TimeSeriesProvider)) {
                         throw new IllegalArgumentException("aggregation: " + agg + " is not a TimeSeriesProvider");
                     }
-                    timeSeriesProviders.add((TimeSeriesProvider) agg);
+                    TimeSeriesProvider provider = (TimeSeriesProvider) agg;
+                    if (coordinatorStats != null) {
+                        coordinatorStats.addInput(provider.getTimeSeries());
+                    }
+                    timeSeriesProviders.add(provider);
                 }
 
                 // Use the stage's own reduce method with circuit breaker tracking
-                return reduceStage.reduce(timeSeriesProviders, reduceContext.isFinalReduce(), cbConsumer);
+                InternalAggregation reducedAggregation = reduceStage.reduce(timeSeriesProviders, reduceContext.isFinalReduce(), cbConsumer);
+                if (coordinatorStats != null && reducedAggregation instanceof TimeSeriesProvider provider) {
+                    coordinatorStats.addOutput(provider.getTimeSeries());
+                    coordinatorStats.recordMetrics();
+                }
+                return reducedAggregation;
             }
 
             // No reduce stage - collect all time series from all aggregations and merge by labels
@@ -271,6 +282,9 @@ public class InternalTimeSeries extends InternalAggregation implements TimeSerie
                 }
                 TimeSeriesProvider provider = (TimeSeriesProvider) aggregation;
                 List<TimeSeries> timeSeries = provider.getTimeSeries();
+                if (coordinatorStats != null) {
+                    coordinatorStats.addInput(timeSeries);
+                }
 
                 for (TimeSeries series : timeSeries) {
                     // Use direct Labels comparison for better performance (no string conversion)
@@ -311,10 +325,28 @@ public class InternalTimeSeries extends InternalAggregation implements TimeSerie
             cbConsumer.accept(SampleList.ARRAYLIST_OVERHEAD);
 
             List<TimeSeries> combinedTimeSeries = new ArrayList<>(mergedSeriesByLabels.values());
+            if (coordinatorStats != null) {
+                coordinatorStats.addOutput(combinedTimeSeries);
+                coordinatorStats.recordMetrics();
+            }
 
             // Return combined time series (no reduce stage)
             return new InternalTimeSeries(name, combinedTimeSeries, metadata, null);
         }
+    }
+
+    private boolean shouldRecordCoordinatorMetrics(ReduceContext reduceContext) {
+        if (reduceContext == null || reduceContext.isFinalReduce() == false) {
+            return false;
+        }
+
+        for (PipelineAggregator pipelineAggregator : reduceContext.pipelineTreeRoot().aggregators()) {
+            if (pipelineAggregator instanceof TimeSeriesCoordinatorAggregator coordinatorAggregator
+                && coordinatorAggregator.referencesAggregation(getName())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
