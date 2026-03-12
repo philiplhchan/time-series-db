@@ -872,7 +872,7 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
             mmappedChunksManager,
             1L
         );
-        tsdbDirectoryReader.doOpenIfChanged(null); // IndexCommit parameter
+        tsdbDirectoryReader.doOpenIfChanged((IndexCommit) null); // IndexCommit parameter
     }
 
     @Test(expected = UnsupportedEncodingException.class)
@@ -1294,12 +1294,32 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
         }
 
         @Override
+        protected DirectoryReader doOpenIfChanged(java.util.concurrent.ExecutorService executorService) throws IOException {
+            return doOpenIfChanged();
+        }
+
+        @Override
         protected DirectoryReader doOpenIfChanged(IndexCommit commit) throws IOException {
             throw new UnsupportedOperationException("Not supported in test helper");
         }
 
         @Override
+        protected DirectoryReader doOpenIfChanged(IndexCommit commit, java.util.concurrent.ExecutorService executorService)
+            throws IOException {
+            throw new UnsupportedOperationException("Not supported in test helper");
+        }
+
+        @Override
         protected DirectoryReader doOpenIfChanged(IndexWriter writer, boolean applyAllDeletes) throws IOException {
+            throw new UnsupportedOperationException("Not supported in test helper");
+        }
+
+        @Override
+        protected DirectoryReader doOpenIfChanged(
+            IndexWriter writer,
+            boolean applyAllDeletes,
+            java.util.concurrent.ExecutorService executorService
+        ) throws IOException {
             throw new UnsupportedOperationException("Not supported in test helper");
         }
 
@@ -1698,12 +1718,32 @@ public class TSDBDirectoryReaderTests extends OpenSearchTestCase {
         }
 
         @Override
+        protected DirectoryReader doOpenIfChanged(java.util.concurrent.ExecutorService executorService) throws IOException {
+            return doOpenIfChanged();
+        }
+
+        @Override
         protected DirectoryReader doOpenIfChanged(IndexCommit commit) throws IOException {
             throw new UnsupportedOperationException("Not supported in test helper");
         }
 
         @Override
+        protected DirectoryReader doOpenIfChanged(IndexCommit commit, java.util.concurrent.ExecutorService executorService)
+            throws IOException {
+            throw new UnsupportedOperationException("Not supported in test helper");
+        }
+
+        @Override
         protected DirectoryReader doOpenIfChanged(IndexWriter writer, boolean applyAllDeletes) throws IOException {
+            throw new UnsupportedOperationException("Not supported in test helper");
+        }
+
+        @Override
+        protected DirectoryReader doOpenIfChanged(
+            IndexWriter writer,
+            boolean applyAllDeletes,
+            java.util.concurrent.ExecutorService executorService
+        ) throws IOException {
             throw new UnsupportedOperationException("Not supported in test helper");
         }
 

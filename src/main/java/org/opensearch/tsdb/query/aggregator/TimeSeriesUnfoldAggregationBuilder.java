@@ -17,6 +17,7 @@ import org.opensearch.search.aggregations.AggregationBuilder;
 import org.opensearch.search.aggregations.AggregatorFactories.Builder;
 import org.opensearch.search.aggregations.AggregatorFactory;
 import org.opensearch.search.aggregations.support.ValuesSourceRegistry;
+import org.opensearch.search.streaming.StreamableAggregationBuilder;
 import org.opensearch.tsdb.TSDBPlugin;
 import org.opensearch.tsdb.query.stage.PipelineStage;
 import org.opensearch.tsdb.query.stage.PipelineStageFactory;
@@ -57,7 +58,9 @@ import java.util.Objects;
  *     .step(1000L);
  * }</pre>
  */
-public class TimeSeriesUnfoldAggregationBuilder extends AbstractAggregationBuilder<TimeSeriesUnfoldAggregationBuilder> {
+public class TimeSeriesUnfoldAggregationBuilder extends AbstractAggregationBuilder<TimeSeriesUnfoldAggregationBuilder>
+    implements
+        StreamableAggregationBuilder {
     /** The name of the aggregation type */
     public static final String NAME = "time_series_unfold";
 
@@ -336,6 +339,12 @@ public class TimeSeriesUnfoldAggregationBuilder extends AbstractAggregationBuild
     @Override
     public BucketCardinality bucketCardinality() {
         return BucketCardinality.MANY;
+    }
+
+    @Override
+    public boolean supportsStreaming() {
+        // Streamable when no stages (pushdown=false) or all stages support concurrent segment search
+        return stages == null || stages.stream().allMatch(UnaryPipelineStage::supportConcurrentSegmentSearch);
     }
 
     @Override

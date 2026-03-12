@@ -224,7 +224,8 @@ public class RestPromQLAction extends BaseTSDBAction {
                 final String finalAggName = AggregationNameExtractor.getFinalAggregationName(searchSourceBuilder);
 
                 tags.put("reached_step", "search");
-                return channel -> client.search(
+                return channel -> executeSearch(
+                    client,
                     searchRequest,
                     new PromMatrixResponseListener(
                         channel,

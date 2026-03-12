@@ -277,6 +277,19 @@ testClusters.integTest {
         plugin(project(':benchmark-telemetry').tasks.bundlePlugin.archiveFile)
     }
 
+    // Enable Arrow Flight streaming for local e2e testing.
+    // Usage: ./gradlew run -ParrowFlight
+    if (gradle.startParameter.projectProperties.containsKey('arrowFlight')) {
+        def flightPluginZip = file("${gradle.startParameter.projectProperties.getOrDefault('arrowFlightPluginPath', '../os-core-arrow-tsdb/plugins/arrow-flight-rpc/build/distributions/arrow-flight-rpc-3.6.0-SNAPSHOT.zip')}")
+        plugin(provider { project.layout.projectDirectory.file(flightPluginZip.absolutePath) })
+        systemProperty 'opensearch.experimental.feature.transport.stream.enabled', 'true'
+        systemProperty 'io.netty.allocator.numDirectArenas', '1'
+        systemProperty 'io.netty.noUnsafe', 'false'
+        systemProperty 'io.netty.tryUnsafe', 'true'
+        systemProperty 'io.netty.tryReflectionSetAccessible', 'true'
+        setting 'stream.search.enabled', 'true'
+    }
+
     if (numZones > 1) numberOfZones = numZones
     if (numNodes > 1) numberOfNodes = numNodes
 
